@@ -1,0 +1,217 @@
+{
+  "evaluation_date": "2025-11-11 14:35:09",
+  "dataset": "NuScenes validation set - CAM_FRONT camera",
+  "methods": {
+    "TrackSSM": {
+      "method": "TrackSSM (Zero-Shot)",
+      "model_weights": "MOT17_epoch160.pt",
+      "dataset": "NuScenes val CAM_FRONT",
+      "num_sequences": 150,
+      "timestamp": "2025-11-11 14:35:09",
+      "tracking_params": {
+        "high_thres": 0.6,
+        "low_thres": 0.1,
+        "frame_rate": 2
+      },
+      "metrics": {
+        "MOTA": 37.3175313852194,
+        "IDF1": 34.84961081780826,
+        "MOTP": 0.052452117934430026,
+        "IDSW": 15468,
+        "MT": 2386,
+        "ML": 159,
+        "FP": 178,
+        "FN": 6574,
+        "Frag": 3838,
+        "Precision": 98.93903537444757,
+        "Recall": 80.84378860150113,
+        "Total_Frames": 5825
+      }
+    },
+    "BotSort": {
+      "method": "BotSort + YOLOX-X + ReID",
+      "dataset": "NuScenes val (7 classes)",
+      "detector": "YOLOX-X",
+      "metrics": {
+        "HOTA": 37.4,
+        "DetA": 31.28,
+        "AssA": 47.12,
+        "DetRe": 36.23,
+        "DetPr": 57.27,
+        "AssRe": 53.06,
+        "AssPr": 70.86,
+        "MOTA": 20.9,
+        "IDSW": 2733,
+        "MT": 716,
+        "ML": 1498,
+        "IDF1": 44.81,
+        "IDR": 36.58,
+        "IDP": 57.81,
+        "IDTP": 14409,
+        "IDFN": 24985,
+        "IDFP": 10515,
+        "Dets": 24924,
+        "GT_IDs": 3602
+      },
+      "per_class_metrics": {
+        "car": {
+          "HOTA": 39.53,
+          "DetA": 33.34,
+          "AssA": 48.97,
+          "DetRe": 39.31,
+          "DetPr": 57.49,
+          "AssRe": 55.32,
+          "AssPr": 71.99,
+          "MOTA": 24.1,
+          "IDSW": 1526,
+          "MT": 472,
+          "ML": 752,
+          "IDF1": 48.17,
+          "IDR": 40.56,
+          "IDP": 59.31,
+          "IDTP": 9053,
+          "IDFN": 13268,
+          "IDFP": 6210,
+          "Dets": 15263,
+          "GT_IDs": 2015
+        },
+        "truck": {
+          "HOTA": 33.8,
+          "DetA": 20.86,
+          "AssA": 56.94,
+          "DetRe": 31.09,
+          "DetPr": 34.81,
+          "AssRe": 62.21,
+          "AssPr": 77.76,
+          "MOTA": -15.4,
+          "IDSW": 63,
+          "MT": 55,
+          "ML": 193,
+          "IDF1": 37.65,
+          "IDR": 35.64,
+          "IDP": 39.9,
+          "IDTP": 1634,
+          "IDFN": 2951,
+          "IDFP": 2461,
+          "Dets": 4095,
+          "GT_IDs": 344
+        },
+        "bus": {
+          "HOTA": 47.57,
+          "DetA": 37.71,
+          "AssA": 61.05,
+          "DetRe": 44.17,
+          "DetPr": 59.68,
+          "AssRe": 67.01,
+          "AssPr": 79.19,
+          "MOTA": 40.57,
+          "IDSW": 7,
+          "MT": 22,
+          "ML": 21,
+          "IDF1": 63.38,
+          "IDR": 55.15,
+          "IDP": 74.51,
+          "IDTP": 605,
+          "IDFN": 492,
+          "IDFP": 207,
+          "Dets": 812,
+          "GT_IDs": 68
+        },
+        "pedestrian": {
+          "HOTA": 19.52,
+          "DetA": 17.59,
+          "AssA": 24.1,
+          "DetRe": 19.74,
+          "DetPr": 46.57,
+          "AssRe": 27.46,
+          "AssPr": 64.69,
+          "MOTA": -2.54,
+          "IDSW": 688,
+          "MT": 46,
+          "ML": 541,
+          "IDF1": 21.29,
+          "IDR": 15.16,
+          "IDP": 35.76,
+          "IDTP": 1309,
+          "IDFN": 7326,
+          "IDFP": 2352,
+          "Dets": 3661,
+          "GT_IDs": 926
+        },
+        "motorcycle": {
+          "HOTA": 18.95,
+          "DetA": 13.68,
+          "AssA": 29.8,
+          "DetRe": 14.55,
+          "DetPr": 44.74,
+          "AssRe": 31.14,
+          "AssPr": 77.28,
+          "MOTA": -11.81,
+          "IDSW": 7,
+          "MT": 0,
+          "ML": 39,
+          "IDF1": 14.35,
+          "IDR": 9.51,
+          "IDP": 29.25,
+          "IDTP": 62,
+          "IDFN": 590,
+          "IDFP": 150,
+          "Dets": 212,
+          "GT_IDs": 50
+        },
+        "bicycle": {
+          "HOTA": 14.72,
+          "DetA": 10.52,
+          "AssA": 22.7,
+          "DetRe": 13.57,
+          "DetPr": 27.39,
+          "AssRe": 23.88,
+          "AssPr": 73.17,
+          "MOTA": -21.71,
+          "IDSW": 15,
+          "MT": 2,
+          "ML": 35,
+          "IDF1": 16.42,
+          "IDR": 12.28,
+          "IDP": 24.78,
+          "IDTP": 56,
+          "IDFN": 400,
+          "IDFP": 170,
+          "Dets": 226,
+          "GT_IDs": 51
+        }
+      }
+    }
+  },
+  "key_differences": {
+    "TrackSSM": [
+      "Zero-shot: trained on MOT17 (pedestrians, 30fps)",
+      "Motion-based: uses State Space Model for prediction",
+      "No appearance features (ReID)",
+      "No fine-tuning on NuScenes"
+    ],
+    "BotSort": [
+      "Trained/optimized on NuScenes",
+      "Uses YOLOX-X detector",
+      "Uses ReID appearance features",
+      "Optimized for autonomous driving scenarios"
+    ]
+  },
+  "performance_comparison": {
+    "MOTA": {
+      "TrackSSM": 37.3175313852194,
+      "BotSort": 20.9,
+      "difference": "16.42%"
+    },
+    "IDF1": {
+      "TrackSSM": 34.84961081780826,
+      "BotSort": 44.81,
+      "difference": "-9.96%"
+    },
+    "ID_Switches": {
+      "TrackSSM": 15468,
+      "BotSort": 2733,
+      "difference": "12735"
+    }
+  }
+}

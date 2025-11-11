@@ -1,0 +1,36 @@
+{
+    "method": "TrackSSM (Zero-Shot)",
+    "dataset": "NuScenes val CAM_FRONT",
+    "per_class_metrics": {
+        "car": {
+            "MOTA": 34.523939559439285,
+            "MOTP": 0.054076241988327216,
+            "IDF1": 32.24049573491749,
+            "IDSW": 12939,
+            "Frag": 3039,
+            "FP": 154,
+            "FN": 4890,
+            "MT": 1914,
+            "ML": 94,
+            "Precision": 99.33054631325197,
+            "Recall": 82.19552157291098,
+            "num_sequences": 149,
+            "num_objects": 27465
+        },
+        "truck": {
+            "MOTA": 29.681159420289855,
+            "MOTP": 0.0356370583145644,
+            "IDF1": 32.65855929538066,
+            "IDSW": 2997,
+            "Frag": 768,
+            "FP": 63,
+            "FN": 1792,
+            "MT": 412,
+            "ML": 101,
+            "Precision": 98.80255865570595,
+            "Recall": 74.02898550724638,
+            "num_sequences": 116,
+            "num_objects": 6900
+        }
+    }
+}

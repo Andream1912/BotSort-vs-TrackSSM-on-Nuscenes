@@ -28,7 +28,7 @@ class STrack(BaseTrack):
         self.conds = deque([], maxlen = 5)
 
 
-        self._tlwh = np.asarray(tlwh, dtype=np.float)
+        self._tlwh = np.asarray(tlwh, dtype=np.float32)
         self.kalman_filter = None
         self.mean, self.covariance = None, None
         self.is_activated = False
@@ -171,7 +171,8 @@ class STrack(BaseTrack):
         """Convert bounding box to format `(min x, min y, max x, max y)`, i.e.,
         `(top left, bottom right)`.
         """
-        ret = self.tlwh.copy()
+        ret = self.tlwh
+        ret = ret.copy()
         ret[2:] += ret[:2]
         return ret
 
@@ -180,7 +181,8 @@ class STrack(BaseTrack):
         """Convert bounding box to format `(min x, min y, max x, max y)`, i.e.,
         `(top left, bottom right)`.
         """
-        ret = self.tlwh.copy()
+        ret = self.tlwh
+        ret = ret.copy()
         ret[:2] = ret[:2] + ret[2:] / 2
         # ret[2:] += ret[:2]
         return ret

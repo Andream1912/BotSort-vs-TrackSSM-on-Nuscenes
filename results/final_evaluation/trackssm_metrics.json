@@ -1,0 +1,26 @@
+{
+  "method": "TrackSSM (Zero-Shot)",
+  "model_weights": "MOT17_epoch160.pt",
+  "dataset": "NuScenes val CAM_FRONT",
+  "num_sequences": 150,
+  "timestamp": "2025-11-11 14:35:09",
+  "tracking_params": {
+    "high_thres": 0.6,
+    "low_thres": 0.1,
+    "frame_rate": 2
+  },
+  "metrics": {
+    "MOTA": 37.3175313852194,
+    "IDF1": 34.84961081780826,
+    "MOTP": 0.052452117934430026,
+    "IDSW": 15468,
+    "MT": 2386,
+    "ML": 159,
+    "FP": 178,
+    "FN": 6574,
+    "Frag": 3838,
+    "Precision": 98.93903537444757,
+    "Recall": 80.84378860150113,
+    "Total_Frames": 5825
+  }
+}

@@ -1,70 +1,70 @@
-.nfs*
-
-# compilation and distribution
+# Python
 __pycache__/
-__pycache__
-_ext
-*.pyc
-*.pyd
+*.py[cod]
+*$py.class
 *.so
-*.dll
-*.egg-info/
+.Python
 build/
+develop-eggs/
 dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
 wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# pytorch/python/numpy formats
-*.pth
-*.pt
-*.pkl
-*.npy
-*.ts
-model_ts*.txt
+# Logs
+*.log
+logs/
 
-# onnx models
-*.onnx
+# Data and Results
+data/nuscenes_mot_front/
+data/nuscenes_mot_front_7classes/
+data/nuscenes_tracks/
+results/nuscenes_trackssm_pure/
+results/nuscenes_trackssm_7classes/
 
-# ipython/jupyter notebooks
-*.ipynb
-**/.ipynb_checkpoints/
+# Training experiments (model checkpoints)
+experiments/
 
-# Editor temporaries
-*.swn
-*.swo
+# IDE
+.vscode/
+.idea/
 *.swp
+*.swo
 *~
 
-# editor settings
-.idea
-.vscode
-_darcs
+# OS
+.DS_Store
+Thumbs.db
 
-# demo 
-**/node_modules
-yarn.lock
-package-lock.json
+# Temporary files
+*.tmp
+*.bak
+*_BACKUP/
+EVALUATION_COMPLETE.md
+NEXT_STEPS_7CLASSES.md
 
-# output dir
-output*
-instant_test_output
-inference_test_output
-events.out.tfevents*
+# Model weights (too large for GitHub)
+*.pth
+*.pt
+!weights/.gitkeep
 
+# External dependencies (should be cloned separately)
+external/YOLOX/
+external/TrackEval/
+external/deep-person-reid/
+external/fast_reid/
 
-*.png
-*.json
-*.diff
-*.jpg
-!/projects/DensePose/doc/images/*.jpg
+# Miniconda
+miniconda3/
 
-# project dirs
-/detectron2/model_zoo/configs
-/datasets/*
-!/datasets/*.*
-/projects/*/datasets
-/sota
-/experiments
-/snippet
-/READ*
-/cache
-/ablation
+# Cache
+.cache/

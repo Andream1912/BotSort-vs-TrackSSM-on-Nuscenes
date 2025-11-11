@@ -21,25 +21,62 @@ from tracking_utils.log import logger
 from tracking_utils.timer import Timer
 from tracking_utils.visualization import plot_tracking
 
+# def write_results(filename, results, data_type='mot'):
+#     if data_type == 'mot':
+#         save_format = '{frame},{id},{x1},{y1},{w},{h},1,-1,-1,-1\n'
+#     elif data_type == 'kitti':
+#         save_format = '{frame} {id} pedestrian 0 0 -10 {x1} {y1} {x2} {y2} -10 -10 -10 -1000 -1000 -1000 -10\n'
+#     else:
+#         raise ValueError(data_type)
+
+#     with open(filename, 'w') as f:
+#         for frame_id, tlwhs, track_ids in results:
+#             if data_type == 'kitti':
+#                 frame_id -= 1
+#             for tlwh, track_id in zip(tlwhs, track_ids):
+#                 if track_id < 0:
+#                     continue
+#                 x1, y1, w, h = tlwh
+#                 x2, y2 = x1 + w, y1 + h
+#                 line = save_format.format(frame=frame_id, id=track_id, x1=x1, y1=y1, x2=x2, y2=y2, w=w, h=h)
+#                 f.write(line)
+#     logger.info('save results to {}'.format(filename))
 def write_results(filename, results, data_type='mot'):
+    """
+    Scrive i risultati in formato:
+    - MOT: frame,id,left,top,width,height,conf,-1,-1,-1
+    - KITTI: come da tuo formato esistente (usa x2,y2)
+    Parametri:
+      results: lista di tuple (frame_id, tlwhs, track_ids)
+               dove tlwhs è una lista/array di [x, y, w, h] in pixel.
+    """
     if data_type == 'mot':
-        save_format = '{frame},{id},{x1},{y1},{w},{h},1,-1,-1,-1\n'
+        save_format = '{frame},{id},{x1:.2f},{y1:.2f},{w:.2f},{h:.2f},{conf:.6f},-1,-1,-1\n'
     elif data_type == 'kitti':
-        save_format = '{frame} {id} pedestrian 0 0 -10 {x1} {y1} {x2} {y2} -10 -10 -10 -1000 -1000 -1000 -10\n'
+        save_format = '{frame} {id} pedestrian 0 0 -10 {x1:.2f} {y1:.2f} {x2:.2f} {y2:.2f} -10 -10 -10 -1000 -1000 -1000 -10\n'
     else:
-        raise ValueError(data_type)
+        raise ValueError(f"Unknown data_type: {data_type}")
 
     with open(filename, 'w') as f:
         for frame_id, tlwhs, track_ids in results:
+            # Per KITTI l'indice frame parte da 0
             if data_type == 'kitti':
                 frame_id -= 1
+            if tlwhs is None or track_ids is None:
+                continue
             for tlwh, track_id in zip(tlwhs, track_ids):
                 if track_id < 0:
                     continue
-                x1, y1, w, h = tlwh
-                x2, y2 = x1 + w, y1 + h
-                line = save_format.format(frame=frame_id, id=track_id, x1=x1, y1=y1, x2=x2, y2=y2, w=w, h=h)
-                f.write(line)
+                x1, y1, w, h = map(float, tlwh)
+                if w <= 0 or h <= 0:
+                    continue
+                tid = int(track_id)
+                if data_type == 'mot':
+                    conf = 1.0  # se non hai lo score del track, 1.0 va benissimo per TrackEval
+                    f.write(save_format.format(frame=frame_id, id=tid, x1=x1, y1=y1, w=w, h=h, conf=conf))
+                else:  # kitti
+                    x2, y2 = x1 + w, y1 + h
+                    f.write(save_format.format(frame=frame_id, id=tid, x1=x1, y1=y1, x2=x2, y2=y2))
     logger.info('save results to {}'.format(filename))
 
 def mkdirs(d):
@@ -123,10 +160,13 @@ class DiffMOT():
         timer_avgs, timer_calls = [], []
         for seq in seqs:
             print(seq)
+            # Remove .txt extension if present (for detection file names)
+            seq_name = seq.replace('.txt', '')
+            
             det_path = osp.join(det_root, seq)
-            img_path = osp.join(img_root, seq, 'img1')
+            img_path = osp.join(img_root, seq_name, 'img1')
 
-            info_path = osp.join(self.config.info_dir, seq, 'seqinfo.ini')
+            info_path = osp.join(self.config.info_dir, seq_name, 'seqinfo.ini')
             seq_info = open(info_path).read()
             seq_width = int(seq_info[seq_info.find('imWidth=') + 8:seq_info.find('\nimHeight')])
             seq_height = int(seq_info[seq_info.find('imHeight=') + 9:seq_info.find('\nimExt')])
@@ -138,15 +178,37 @@ class DiffMOT():
             results = []
             frame_id = 0
 
-            frames = [s for s in os.listdir(det_path)]
-            frames.sort()
+            # Load all detections from single file and group by frame
+            all_dets = np.loadtxt(det_path, dtype=np.float32, delimiter=',', ndmin=2)
+            
+            # Group detections by frame_id
+            det_dict = {}
+            if all_dets.size > 0:  # Check if file is not empty
+                if all_dets.ndim == 1:
+                    all_dets = all_dets.reshape(1, -1)
+                
+                for det in all_dets:
+                    fid = int(det[0])
+                    if fid not in det_dict:
+                        det_dict[fid] = []
+                    det_dict[fid].append(det[1:])  # Store [x,y,w,h,score,class_id]
+            
+            # Get sorted frame IDs (or empty list if no detections)
+            frame_ids = sorted(det_dict.keys()) if det_dict else []
+            
+            # Skip sequences with no detections
+            if len(frame_ids) == 0:
+                logger.warning(f'No detections found in {seq}, skipping...')
+                continue
+            
             imgs = [s for s in os.listdir(img_path)]
             imgs.sort()
             if self.config.show_image:
-                mkdirs(f'{result_root}/{seq}')
-            for i, f in enumerate(frames):
-                if frame_id % 10 == 0:
-                    logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
+                mkdirs(f'{result_root}/{seq_name}')
+            
+            for i, fid in enumerate(frame_ids):
+                if fid % 10 == 0:
+                    logger.info('Processing frame {} ({:.2f} fps)'.format(fid, 1. / max(1e-5, timer.average_time)))
                 
                 if self.config.use_detection_model:
                     img = cv2.imread(osp.join(img_path, imgs[i]))
@@ -157,9 +219,32 @@ class DiffMOT():
                     outputs = detection_model(input_image)
                     dets = self._postprocess_results(outputs, ori_h, ori_w)[:, :5].detach().cpu().numpy()
                 else:
-                    f_path = osp.join(det_path, f)
                     timer.tic()
-                    dets = np.loadtxt(f_path, dtype=np.float32, delimiter=',').reshape(-1, 6)[:, 1:6]
+                    # Get detections for current frame
+                    frame_dets = np.array(det_dict[fid], dtype=np.float32)
+                    
+                    # Gestione file vuoti
+                    if frame_dets.size == 0:
+                        # Nessuna detection in questo frame
+                        dets = np.zeros((0, 5), dtype=np.float32)  # [x1,y1,x2,y2,score] vuoto
+                    else:
+                        # Normalizza shape a (N, M)
+                        if frame_dets.ndim == 1:
+                            frame_dets = frame_dets.reshape(1, -1)
+
+                        # Format: [x,y,w,h,score,class_id] (6 columns after removing frame_id)
+                        xywh = frame_dets[:, 0:4].copy()    # [x, y, w, h]
+                        scores = frame_dets[:, 4:5].copy()  # [score]
+                        
+                        # Converti XYWH -> TLBR = [x1, y1, x2, y2]
+                        x1y1 = xywh[:, 0:2]
+                        x2y2 = xywh[:, 0:2] + xywh[:, 2:4]
+                        tlbr = np.hstack([x1y1, x2y2])
+
+                        # ByteTracker si aspetta [x1, y1, x2, y2, score]
+                        dets = np.hstack([tlbr, scores])
+                        if i == 0 and fid == frame_ids[0]:
+                            print("[DEBUG] Esempio det TLBR+score:", dets[:3])
                 
                 # track
                 online_targets = tracker.update(dets, self.model, seq_width, seq_height)
@@ -172,18 +257,17 @@ class DiffMOT():
                     online_tlwhs.append(tlwh)
                     online_ids.append(tid)
                 timer.toc()
-                # save results
-                results.append((frame_id + 1, online_tlwhs, online_ids))
+                # save results (use fid which is 1-indexed already from file)
+                results.append((fid, online_tlwhs, online_ids))
                 if self.config.show_image:
                     img = cv2.imread(osp.join(img_path, imgs[i]))
-                    online_im = plot_tracking(img.copy(), online_tlwhs, online_ids, frame_id=frame_id,
+                    online_im = plot_tracking(img.copy(), online_tlwhs, online_ids, frame_id=fid,
                                                 fps=1. / timer.average_time)
-                    cv2.imwrite(os.path.join(f'{result_root}/{seq}', '{:05d}.jpg'.format(frame_id)), online_im)
-                frame_id += 1
+                    cv2.imwrite(os.path.join(f'{result_root}/{seq_name}', '{:05d}.jpg'.format(fid)), online_im)
 
-            result_filename = osp.join(result_root, '{}.txt'.format(seq))
-            write_results(result_filename, results)
-            nf, ta, tc = len(frames), timer.average_time, timer.calls
+            result_filename = osp.join(result_root, '{}.txt'.format(seq_name))
+            write_results(result_filename, results, data_type='mot')    
+            nf, ta, tc = len(frame_ids), timer.average_time, timer.calls
             n_frame += nf
             timer_avgs.append(ta)
             timer_calls.append(tc)
@@ -204,6 +288,13 @@ class DiffMOT():
         elif 'sports' in self.config.exp_name:
             gt_folder_path='../sportsmot/val'
             val_map_path='../sportsmot/splits_txt/val.txt'
+        elif 'nuscenes' in self.config.exp_name:
+            gt_folder_path='./data/nuscenes_mot_front/val'
+            val_map_path='./data/nuscenes_mot_front/val_seqmap.txt'
+        else:
+            # Default: skip TrackEval if dataset not recognized
+            logger.info("Dataset not recognized for TrackEval, skipping HOTA computation")
+            return
         val_type='{gt_folder}/{seq}/gt/gt.txt'
         os.system(f"python ./TrackEval/scripts/run_mot_challenge.py  \
                                             --SPLIT_TO_EVAL train  \
@@ -217,7 +308,7 @@ class DiffMOT():
                                             --NUM_PARALLEL_CORES 8  \
                                             --PLOT_CURVES False   \
                                             --TRACKERS_FOLDER  {self.config.save_dir}  \
-                                            --GT_LOC_FORMA {val_type}")
+                                            --GT_LOC_FORMAT {val_type}")
 
 
     def _build(self):
@@ -257,7 +348,13 @@ class DiffMOT():
                 checkpoint_dir = osp.join( f"weights/sota/{self.config.exp_name}/FFN_epoch{epoch}.pt")
                 # checkpoint_dir = osp.join( f"ablation/tracklen/dance/_epoch120.pt")
                 # checkpoint_dir = osp.join( f"./SportsMOT_epoch1200.pt")
-            self.checkpoint = torch.load(checkpoint_dir, map_location = "cpu")
+                if os.path.exists(self.config.get("weight_path", "")):
+                    checkpoint_dir = self.config["weight_path"]
+                else:
+                    checkpoint_dir = f'weights/sota/{self.config["eval_expname"]}/FFN_epoch{self.config["eval_at"]}.pt'
+
+                self.checkpoint = torch.load(checkpoint_dir, map_location="cpu")
+                print(f"[EVAL] Loaded weights from: {checkpoint_dir}")
         print("> Directory built!")
 
     def _build_optimizer(self):
@@ -279,6 +376,26 @@ class DiffMOT():
         self.model = model
         if not self.config.eval_mode:
             self.model = torch.nn.DataParallel(self.model, self.config.gpus).to('cuda')
+            try:
+                import os, os.path as osp 
+                # cerchiamo il file in due posizioni tipiche
+                cand = [
+                    osp.join(osp.dirname(__file__), "weights", "MOT17_epoch160.pt"),
+                    osp.join(osp.dirname(osp.dirname(__file__)), "weights", "MOT17_epoch160.pt"),
+                ]
+                ckpt_path = next((p for p in cand if osp.isfile(p)), None)
+                if ckpt_path is not None:
+                    print(f"[FT] Loading pretrained weights: {ckpt_path}")
+                    ckpt = torch.load(ckpt_path, map_location="cpu")
+                    state = ckpt.get("ddpm", ckpt)  # alcuni checkpoint salvano sotto 'ddpm'
+                    # togli eventuale prefisso 'module.' perché ora usiamo DataParallel
+                    state = {k.replace("module.", ""): v for k, v in state.items()}
+                    missing, unexpected = self.model.module.load_state_dict(state, strict=False)
+                    print(f"[FT] Weights loaded. missing={len(missing)}, unexpected={len(unexpected)}")
+                else:
+                    print("[FT] Pretrained MOT17 weights not found, training from scratch.")
+            except Exception as e:
+                print(f"[FT] WARNING: could not load pretrained weights: {e}")
             np = self.get_num_params(self.model)
             logger.info(f'Motion model:  {np} parameters')
         else:
