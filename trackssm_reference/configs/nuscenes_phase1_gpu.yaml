@@ -1,0 +1,38 @@
+# Configuration per Phase 1: Decoder-only fine-tuning (GPU OPTIMIZED)
+
+# === Model Architecture ===
+encoder_dim: 256
+n_layer: 2
+vocab_size: 6400
+interval: 5
+use_diffmot: false
+
+# === Training Hyperparameters ===
+batch_size: 64  # GPU potente - batch grande
+lr: 0.0001  # 1e-4
+weight_decay: 0.0001  # 1e-4
+max_epochs: 40
+warmup_epochs: 3
+
+# === Early Stopping ===
+early_stop_patience: 7
+early_stop_metric: val_loss
+
+# === Loss Weights ===
+loss_bbox_weight: 1.0
+loss_iou_weight: 2.0
+loss_temporal_weight: 0.5
+
+# === Dataset ===
+min_track_len: 3
+num_workers: 12  # GPU: molti workers per saturare GPU
+history_len: 5          # 5 frame di storia
+min_track_len: 6        # 5 storia + 1 corrente = 6 (coerente con window_size)
+normalize: true
+img_width: 1600
+img_height: 900
+num_workers: 12
+
+# === Device ===
+device: cuda
+

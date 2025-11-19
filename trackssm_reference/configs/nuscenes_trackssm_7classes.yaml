@@ -1,0 +1,56 @@
+# =======================
+# Eval Config - NuScenes CAM_FRONT (7 CLASSES)
+# Test TrackSSM puro (pre-trained su MOT17) su NuScenes con tutte le 7 classi
+# =======================
+
+# Mode
+eps: 0.001
+eval_mode: True
+use_diffmot: False
+
+# Optimizer (non usato in eval, ma richiesto dal codice)
+lr: 0.0001
+batch_size: 1
+
+# Directories - AGGIORNATE PER 7 CLASSI
+data_dir: "./data/nuscenes_tracks/train"  # Non usato in eval mode
+det_dir: "./data/nuscenes_mot_front_7classes/detections/val"
+info_dir: "./data/nuscenes_mot_front_7classes/val"
+reid_dir: "./cache/embeddings"  # Non usato se non usi ReID
+save_dir: "./results/nuscenes_trackssm_7classes"
+
+# Model weights
+# Usando il modello pre-trained su MOT17 (test "puro" senza fine-tuning)
+weight_path: "../weights/MOT17_epoch160.pt"  
+diffnet: HMINet
+
+# Model & test params
+interval: 5
+augment: False
+encoder_dim: 256
+tf_layer: 3
+eval_at: 160  # Epoch del checkpoint (non usato in eval, ma richiesto)
+
+# Tracking thresholds
+# NOTA: Questi valori sono ottimizzati per MOT17, potrebbero non essere ideali per NuScenes
+high_thres: 0.6   # Threshold per detections ad alta confidenza
+low_thres: 0.1    # Threshold per detections a bassa confidenza (second association)
+w_assoc_emb: 2.2  # Peso per ReID embedding (se usato)
+aw_param: 1.7     # Parametro per appearance weight
+
+# Hardware
+gpus: [0]
+device: cuda
+eval_device: None
+preprocess_workers: 8
+
+# Experiment naming
+eval_expname: nuscenes_trackssm_7classes
+show_image: False  # Set True per visualizzare i risultati frame-by-frame
+use_detection_model: False  # Usiamo detections pre-generate
+
+# Notes:
+# - Questo config evalua TrackSSM (zero-shot) su TUTTE le 7 classi NuScenes
+# - Classi: car, truck, bus, trailer, pedestrian, motorcycle, bicycle
+# - 34,286 detection totali (vs 8,135 con solo car/truck)
+# - Tempo stimato: ~30 minuti per 150 scene

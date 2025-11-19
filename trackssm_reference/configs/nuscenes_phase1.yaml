@@ -1,0 +1,34 @@
+# Configuration per Phase 1: Decoder-only fine-tuning
+
+# === Model Architecture ===
+encoder_dim: 256
+n_layer: 2
+vocab_size: 6400
+interval: 5
+use_diffmot: false
+
+# === Training Hyperparameters ===
+batch_size: 8  # CPU: ridotto per memory. GPU: aumentare a 32-64
+lr: 0.0001  # 1e-4
+weight_decay: 0.0001  # 1e-4
+max_epochs: 40
+warmup_epochs: 3
+
+# === Early Stopping ===
+early_stop_patience: 7
+early_stop_metric: val_loss  # o 'idf1', 'hota_id' se implementi evaluation
+
+# === Loss Weights ===
+loss_bbox_weight: 1.0
+loss_iou_weight: 2.0
+loss_temporal_weight: 0.5
+
+# === Dataset ===
+sequence_length: 20  # Numero di frame per sequenza
+sample_interval: 1   # Frame consecutivi
+num_queries: 300     # Max numero di track per sample
+min_track_len: 3     # Minima lunghezza track
+num_workers: 4       # CPU: workers paralleli per data loading
+
+# === Device ===
+device: cpu  # Temporaneo - impostare 'cuda' quando GPU disponibile
