@@ -1,8 +1,10 @@
 # Python
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyc
 .Python
 build/
 develop-eggs/
@@ -27,12 +29,20 @@ logs/
 # Data and Results
 data/nuscenes_mot_front/
 data/nuscenes_mot_front_7classes/
+data/nuscenes_mot_6cams_interpolated/
+data/nuscenes_test_interpolation/
 data/nuscenes_tracks/
 results/nuscenes_trackssm_pure/
 results/nuscenes_trackssm_7classes/
+results/
 
 # Training experiments (model checkpoints)
 experiments/
+weights/
+!weights/.gitkeep
+
+# Sanity check outputs
+sanity_check_output/
 
 # IDE
 .vscode/

@@ -14,18 +14,25 @@
         "frame_rate": 2
       },
       "metrics": {
-        "MOTA": 37.3175313852194,
-        "IDF1": 34.84961081780826,
-        "MOTP": 0.052452117934430026,
-        "IDSW": 15468,
-        "MT": 2386,
-        "ML": 159,
-        "FP": 178,
-        "FN": 6574,
-        "Frag": 3838,
-        "Precision": 98.93903537444757,
-        "Recall": 80.84378860150113,
-        "Total_Frames": 5825
+        "HOTA": 26.45,
+        "DetA": 14.73,
+        "AssA": 51.46,
+        "DetRe": 13.08,
+        "DetPr": 16.38,
+        "MOTA": 29.904334130548893,
+        "IDF1": 34.85,
+        "MOTP": 0.0525,
+        "IDSW": 16612,
+        "MT": 2210,
+        "ML": 282,
+        "FP": 506,
+        "FN": 6915,
+        "Frag": 3752,
+        "Precision": 98.18488359579581,
+        "Recall": 79.83141807151607,
+        "Total_Frames": 5825,
+        "GT_IDs": 4063,
+        "Pred_IDs": 5557
       }
     },
     "BotSort": {
@@ -198,20 +205,35 @@
     ]
   },
   "performance_comparison": {
+    "HOTA": {
+      "TrackSSM": 26.45,
+      "BotSort": 37.4,
+      "difference": "-10.95%"
+    },
+    "DetA": {
+      "TrackSSM": 14.73,
+      "BotSort": 31.28,
+      "difference": "-16.55%"
+    },
+    "AssA": {
+      "TrackSSM": 51.46,
+      "BotSort": 47.12,
+      "difference": "+4.34%"
+    },
     "MOTA": {
-      "TrackSSM": 37.3175313852194,
+      "TrackSSM": 37.32,
       "BotSort": 20.9,
-      "difference": "16.42%"
+      "difference": "+16.42%"
     },
     "IDF1": {
-      "TrackSSM": 34.84961081780826,
+      "TrackSSM": 34.85,
       "BotSort": 44.81,
       "difference": "-9.96%"
     },
     "ID_Switches": {
       "TrackSSM": 15468,
       "BotSort": 2733,
-      "difference": "12735"
+      "difference": "+12735 (5.66x more)"
     }
   }
 }

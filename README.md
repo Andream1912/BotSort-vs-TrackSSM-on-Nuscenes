@@ -9,6 +9,35 @@
 > 
 > *[arXiv 2409.00487](https://arxiv.org/abs/2409.00487)*
 
+---
+
+## 🚀 NuScenes Fine-tuning Extension
+
+This repository has been extended with a complete pipeline for fine-tuning TrackSSM on the **NuScenes dataset** for autonomous driving applications.
+
+### Key Features
+- ✅ **Multi-camera support**: 6 cameras (CAM_FRONT, FRONT_LEFT, FRONT_RIGHT, BACK, BACK_LEFT, BACK_RIGHT)
+- ✅ **Multi-class tracking**: 7 vehicle classes (car, truck, bus, trailer, pedestrian, motorcycle, bicycle)
+- ✅ **Temporal interpolation**: 2Hz → 12fps for stable training
+- ✅ **Two-phase fine-tuning**: Decoder-only → Full model with differential LR
+
+**📚 Complete Guide**: See [README_TRAINING.md](README_TRAINING.md) for the full fine-tuning pipeline.
+
+**Quick Start**:
+```bash
+# 1. Generate interpolated dataset
+export NUSC_ROOT=/mnt/datasets/Nuscense
+bash scripts/data_preparation/generate_splits.sh
+
+# 2. Train Phase 1 (decoder-only)
+bash scripts/training/run_phase1_training.sh
+
+# 3. Train Phase 2 (full fine-tuning)
+bash scripts/training/run_phase2_training.sh
+```
+
+---
+
 
 ## News
 - Submitting the paper on Arxiv at Sep 4 2024.
@@ -138,5 +167,121 @@ python main.py --config ./configs/sportsmot_test.yaml
 ## Acknowledgements
 A large part of the code is borrowed from [Mamba](https://github.com/state-spaces/mamba),[DiffMOT](https://github.com/Kroery/DiffMOT), [FairMOT](https://github.com/ifzhang/FairMOT), [ByteTrack](https://github.com/ifzhang/ByteTrack). 
  Many thanks for their wonderful works.
+
+---
+
+## 📁 Project Structure
+
+```
+trackssm_reference/
+├── README.md                          # This file - project overview
+├── README_TRAINING.md                 # Complete NuScenes fine-tuning guide
+├── LICENSE                            # License information
+├── requirement.txt                    # Python dependencies
+├── .gitignore                         # Git ignore patterns
+│
+├── main.py                            # Main entry point for tracking
+├── diffmot.py                         # Core DiffMOT implementation
+│
+├── configs/                           # Configuration files
+│   ├── nuscenes_phase1.yaml          # Phase 1 training hyperparameters
+│   ├── nuscenes_phase2.yaml          # Phase 2 training hyperparameters
+│   ├── nuscenes_trackssm_7classes.yaml  # Inference config for NuScenes
+│   ├── mot.yaml                      # MOT17/MOT20 training
+│   ├── mot17_test.yaml               # MOT17 test
+│   ├── dancetrack.yaml               # DanceTrack training
+│   └── sportsmot.yaml                # SportsMOT training
+│
+├── scripts/                           # All executable scripts
+│   ├── data_preparation/             # Dataset generation and preprocessing
+│   │   ├── prepare_nuscenes_interpolated.py   # Generate interpolated MOT format
+│   │   ├── sanity_check_projection.py         # Verify 3D→2D projection
+│   │   └── generate_splits.sh                 # Generate train/val/test splits
+│   │
+│   ├── training/                     # Training scripts
+│   │   ├── train_phase1_decoder.py   # Phase 1: Decoder-only fine-tuning
+│   │   ├── train_phase2_full.py      # Phase 2: Full fine-tuning
+│   │   ├── run_phase1_training.sh    # Launch Phase 1
+│   │   └── run_phase2_training.sh    # Launch Phase 2
+│   │
+│   ├── evaluation/                   # Metrics computation
+│   │   ├── compute_hota_trackssm.py  # HOTA metrics for TrackSSM
+│   │   ├── compute_per_class_metrics.py  # Per-class breakdown
+│   │   └── recompute_metrics_correct.py  # Recompute with fixes
+│   │
+│   ├── plotting/                     # Visualization scripts
+│   │   ├── plot_comparison_7classes.py       # 7-class comparison plots
+│   │   ├── generate_comparison_plots.py      # Generate comparison figures
+│   │   └── generate_final_plots.py           # Final publication plots
+│   │
+│   └── utils/                        # Utility scripts
+│       ├── show_results.sh           # Display results summary
+│       └── quickstart_test.sh        # Quick test script
+│
+├── dataset/                           # PyTorch Dataset implementations
+│   └── nuscenes_interpolated_dataset.py  # NuScenes dataset loader
+│
+├── models/                            # Neural network architectures
+│   ├── mamba_encoder.py              # Mamba encoder (SSM backbone)
+│   ├── motion_decoder.py             # Decoder for motion prediction
+│   ├── condition_embedding.py        # Condition embedding module
+│   ├── diffusion.py                  # Diffusion process
+│   └── ...
+│
+├── tracker/                           # Tracking algorithms
+│   ├── DiffMOTtracker.py             # DiffMOT tracker implementation
+│   ├── BYTETracker.py                # ByteTrack baseline
+│   └── ...
+│
+├── tracking_utils/                    # Tracking utilities
+│   ├── kalman_filter.py              # Kalman filter
+│   ├── matching.py                   # Data association
+│   └── ...
+│
+├── tools/                             # Export and inference tools
+│   ├── export_nuscenes_mot_front.py  # Export NuScenes to MOT format
+│   └── infer_yolox_perframe.py       # YOLOX inference
+│
+├── external/                          # External dependencies
+│   ├── YOLOX/                        # YOLOX detector
+│   └── TrackEval/                    # Evaluation framework
+│
+├── data/                              # Generated datasets (gitignored)
+│   ├── nuscenes_mot_6cams_interpolated/  # Interpolated dataset
+│   ├── nuscenes_mot_front_7classes/      # Front camera only
+│   └── ...
+│
+├── weights/                           # Model checkpoints (gitignored)
+│   ├── phase1/                       # Phase 1 checkpoints
+│   ├── phase2/                       # Phase 2 checkpoints
+│   └── ...
+│
+├── results/                           # Tracking results (gitignored)
+│   ├── nuscenes_trackssm_finetuned/  # Fine-tuned model results
+│   └── ...
+│
+└── logs/                              # Training logs (gitignored)
+```
+
+### Directory Descriptions
+
+- **`scripts/`**: All executable scripts organized by purpose
+  - `data_preparation/`: Dataset generation, interpolation, sanity checks
+  - `training/`: Training scripts for Phase 1 and Phase 2 fine-tuning
+  - `evaluation/`: Metrics computation (HOTA, IDF1, MOTA, etc.)
+  - `plotting/`: Visualization and plotting scripts
+  - `utils/`: Miscellaneous utility scripts
+
+- **`configs/`**: YAML configuration files for training and inference
+
+- **`dataset/`**: PyTorch Dataset classes for loading data
+
+- **`models/`**: Neural network architectures (encoder, decoder, diffusion)
+
+- **`tracker/`**: Tracking algorithm implementations
+
+- **`data/`**, **`weights/`**, **`results/`**: Generated outputs (gitignored)
+
+---
 
 

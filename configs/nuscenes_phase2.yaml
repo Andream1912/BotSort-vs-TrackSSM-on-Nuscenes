@@ -1,0 +1,35 @@
+# Configuration per Phase 2: Full fine-tuning
+
+# === Model Architecture ===
+encoder_dim: 256
+n_layer: 2
+vocab_size: 6400
+interval: 5
+use_diffmot: false
+
+# === Training Hyperparameters (Differential LR) ===
+batch_size: 32  # GPU potente - batch grande per convergenza stabile
+lr_encoder: 0.00001  # 1e-5 (basso per encoder pretrained)
+lr_decoder: 0.00005  # 5e-5 (moderato per decoder già adattato)
+weight_decay: 0.0001
+max_epochs: 80
+warmup_epochs: 5
+
+# === Early Stopping ===
+early_stop_patience: 10
+early_stop_metric: val_loss
+
+# === Loss Weights ===
+loss_bbox_weight: 1.0
+loss_iou_weight: 2.0
+loss_temporal_weight: 0.5
+
+# === Dataset ===
+sequence_length: 20
+sample_interval: 1
+num_queries: 300
+min_track_len: 3
+num_workers: 8  # GPU potente - più workers per data loading parallelo
+
+# === Device ===
+device: cuda
