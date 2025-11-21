@@ -80,6 +80,11 @@ class Phase1Config:
         self.loss_bbox_weight = config_dict.get('loss_bbox_weight', 1.0)
         self.loss_iou_weight = config_dict.get('loss_iou_weight', 2.0)
         self.loss_temporal_weight = config_dict.get('loss_temporal_weight', 0.5)
+
+        # Dataset
+        self.train_sample_stride = config_dict.get('train_sample_stride', 1)
+        self.val_sample_stride = config_dict.get('val_sample_stride', 1)
+
         
         # Device
         self.device = config_dict.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
@@ -201,11 +206,12 @@ def train_epoch(model, dataloader, optimizer, scheduler, config, epoch, writer):
 
 def validate_epoch(model, dataloader, config, epoch, writer):
     """Validate for one epoch"""
-    model.eval()
+    # IMPORTANTISSIMO: teniamo il modello in train() per usare il branch di loss
+    # ma con torch.no_grad() non calcoliamo gradienti.
+    model.train()
     
-    total_loss = 0
-    total_loss_bbox = 0
-    total_loss_iou = 0
+    total_loss = 0.0
+    num_batches = len(dataloader)
     
     pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{config.max_epochs} [VAL]")
     
@@ -216,39 +222,30 @@ def validate_epoch(model, dataloader, config, epoch, writer):
                 if torch.is_tensor(v):
                     batch[k] = v.to(config.device)
             
-            # Forward pass
-            loss_dict = model(batch)
+            # Forward pass: D2MP -> Time_info_decoder (in modalità training) -> scalar loss
+            loss = model(batch)  # loss è un Tensor 0-dim
             
-            # Compute total loss
-            if isinstance(loss_dict, dict):
-                loss = (config.loss_bbox_weight * loss_dict.get('loss_bbox', 0) +
-                       config.loss_iou_weight * loss_dict.get('loss_iou', 0))
+            # Sicurezza: se per qualche motivo non fosse scalare, fai la media
+            if isinstance(loss, torch.Tensor) and loss.numel() > 1:
+                loss_val = loss.mean().item()
             else:
-                loss = loss_dict
+                loss_val = float(loss.item())
             
-            # Update statistics
-            total_loss += loss.item()
-            if isinstance(loss_dict, dict):
-                total_loss_bbox += loss_dict.get('loss_bbox', 0).item()
-                total_loss_iou += loss_dict.get('loss_iou', 0).item()
+            total_loss += loss_val
             
-            pbar.set_postfix({'val_loss': f'{loss.item():.4f}'})
+            pbar.set_postfix({'val_loss': f'{loss_val:.4f}'})
     
-    # Epoch statistics
-    avg_loss = total_loss / len(dataloader)
-    avg_loss_bbox = total_loss_bbox / len(dataloader)
-    avg_loss_iou = total_loss_iou / len(dataloader)
+    avg_loss = total_loss / max(num_batches, 1)
     
     # Log to tensorboard
     writer.add_scalar('Val/Loss', avg_loss, epoch)
-    writer.add_scalar('Val/Loss_BBox', avg_loss_bbox, epoch)
-    writer.add_scalar('Val/Loss_IoU', avg_loss_iou, epoch)
     
     return {
         'loss': avg_loss,
-        'loss_bbox': avg_loss_bbox,
-        'loss_iou': avg_loss_iou
+        'loss_bbox': 0.0,  # placeholder, se ti servono separati devi modificarli nel decoder
+        'loss_iou': 0.0
     }
+
 
 
 def main():
@@ -293,7 +290,8 @@ def main():
         min_track_len=config_dict.get('min_track_len', 6),
         normalize=config_dict.get('normalize', True),
         img_width=config_dict.get('img_width', 1600),
-        img_height=config_dict.get('img_height', 900)
+        img_height=config_dict.get('img_height', 900),
+        sample_stride=config.train_sample_stride,   
     )
     
     val_dataset = NuScenesTrackDataset(
@@ -303,8 +301,10 @@ def main():
         min_track_len=config_dict.get('min_track_len', 6),
         normalize=config_dict.get('normalize', True),
         img_width=config_dict.get('img_width', 1600),
-        img_height=config_dict.get('img_height', 900)
+        img_height=config_dict.get('img_height', 900),
+        sample_stride=config.val_sample_stride,     
     )
+
     
     train_loader = DataLoader(
         train_dataset, 
@@ -341,13 +341,33 @@ def main():
     
     model = D2MP(config, encoder=encoder, device=config.device)
     model = model.to(config.device)
-    
     # Load pretrained weights (MOT17)
     if args.pretrained:
         print(f"\nLoading pretrained weights from: {args.pretrained}")
         checkpoint = torch.load(args.pretrained, map_location=config.device)
-        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        print("✓ Pretrained weights loaded")
+
+        # Il checkpoint può essere:
+        # - un dict con 'model_state_dict' o 'state_dict'
+        # - oppure direttamente uno state_dict
+        if isinstance(checkpoint, dict):
+            if 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+            elif 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            else:
+                # Probabile caso tuo: checkpoint è già uno state_dict
+                state_dict = checkpoint
+        else:
+            state_dict = checkpoint
+
+        incompatible = model.load_state_dict(state_dict, strict=False)
+        print("✓ Pretrained weights loaded (strict=False)")
+        if incompatible.missing_keys:
+            print(f"  ⚠ Missing keys: {len(incompatible.missing_keys)} (ok: parti non presenti nel checkpoint)")
+        if incompatible.unexpected_keys:
+            print(f"  ⚠ Unexpected keys: {len(incompatible.unexpected_keys)} (ok: pesi in più nel checkpoint)")
+
+    
     
     # FREEZE ENCODER
     model = freeze_encoder(model)

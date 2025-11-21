@@ -13,7 +13,7 @@ echo ""
 # Percorsi
 PROJECT_ROOT="/user/amarino/tesi_project_amarino/trackssm_reference"
 DATA_ROOT="$PROJECT_ROOT/data/nuscenes_mot_6cams_interpolated"
-CONFIG="$PROJECT_ROOT/configs/nuscenes_phase1_gpu.yaml"
+CONFIG="$PROJECT_ROOT/configs/nuscenes_phase1.yaml"
 OUTPUT_DIR="$PROJECT_ROOT/weights/phase1"
 LOG_FILE="$PROJECT_ROOT/logs/phase1_training.log"
 
@@ -136,11 +136,14 @@ fi
 echo ""
 echo "🚀 Avvio training in background..."
 
+PRETRAINED="/user/amarino/tesi_project_amarino/weights/MOT17_epoch160.pt"
+
 nohup python scripts/training/train_phase1_decoder.py \
-    --config $CONFIG \
-    --data_root $DATA_ROOT \
-    --output_dir $OUTPUT_DIR \
-    > $LOG_FILE 2>&1 &
+    --config "$CONFIG" \
+    --data_root "$DATA_ROOT" \
+    --output_dir "$OUTPUT_DIR" \
+    --pretrained "$PRETRAINED" \
+    > "$LOG_FILE" 2>&1 &
 
 TRAIN_PID=$!
 
