@@ -20,7 +20,7 @@ import copy
 class Track:
     """Single track with history and state"""
     
-    def __init__(self, track_id, bbox, class_id, frame_id, history_len=5):
+    def __init__(self, track_id, bbox, class_id, frame_id, history_len=5, min_hits=3):
         """
         Args:
             track_id: Unique track ID
@@ -28,10 +28,12 @@ class Track:
             class_id: Object class
             frame_id: Frame where track was created
             history_len: Number of history frames to keep
+            min_hits: Minimum hits before track is activated
         """
         self.track_id = track_id
         self.class_id = class_id
         self.history_len = history_len
+        self.min_hits = min_hits
         
         # Track state
         self.bbox = bbox  # Current bbox [x, y, w, h]
@@ -64,7 +66,7 @@ class Track:
         self.confidence = confidence
         
         # Activate track after enough hits
-        if self.hits >= 3:
+        if self.hits >= self.min_hits:
             self.is_activated = True
     
     def predict(self, model, device, img_width=1600, img_height=900):
@@ -287,7 +289,8 @@ class TrackSSMTracker:
                 bbox=det['bbox'],
                 class_id=det['class_id'],
                 frame_id=self.frame_id,
-                history_len=self.history_len
+                history_len=self.history_len,
+                min_hits=self.min_hits
             )
             self.tracked_tracks.append(new_track)
         
