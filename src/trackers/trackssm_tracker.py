@@ -303,7 +303,9 @@ class TrackSSMTracker:
                 det = low_conf_dets[det_idx]
                 track.update(det['bbox'], self.frame_id, det['confidence'])
                 track.is_lost = False
-                self.tracked_tracks.append(track)
+                # Fix: Prevent duplicate tracks in tracked_tracks
+                if track not in self.tracked_tracks:
+                    self.tracked_tracks.append(track)
             
             # Update lost tracks
             self.lost_tracks = [self.lost_tracks[i] for i in unmatched_lost_tracks]

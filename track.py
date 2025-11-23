@@ -140,8 +140,8 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
     
     results = []
     
-    # Process each frame
-    for frame_id, img_path in enumerate(tqdm(images, desc=scene_name), start=1):
+    # Process each frame (no per-frame progress bar for cleaner output)
+    for frame_id, img_path in enumerate(images, start=1):
         # Load image
         img = cv2.imread(str(img_path))
         
@@ -203,8 +203,10 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
             f.write(f"{r['frame']},{r['track_id']},{r['bbox'][0]:.2f},{r['bbox'][1]:.2f},"
                    f"{r['bbox'][2]:.2f},{r['bbox'][3]:.2f},{r['confidence']:.4f},{r['class_id']},1\n")
     
-    # Format 2: Unified class (for TrackEval)
-    with open(output_file, 'w') as f:
+    # Format 2: Unified class (for TrackEval) - save in data/ subdirectory
+    output_file_data = Path(output_dir) / 'data' / f"{scene_name}.txt"
+    output_file_data.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file_data, 'w') as f:
         for r in results:
             f.write(f"{r['frame']},{r['track_id']},{r['bbox'][0]:.2f},{r['bbox'][1]:.2f},"
                    f"{r['bbox'][2]:.2f},{r['bbox'][3]:.2f},{r['confidence']:.4f},1,1\n")
@@ -212,10 +214,12 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
     # Release video writer if used
     if video_writer is not None:
         video_writer.release()
-        print(f"✓ Video saved")
+        print(f"  ✓ Video saved: {len(images)} frames")
     
-    print(f"✓ Saved {len(results)} tracks to {output_file}")
-    print(f"  → With classes: {output_with_classes}")
+    num_unique_tracks = len(set(r['track_id'] for r in results))
+    print(f"  ✓ Saved {num_unique_tracks} unique tracks ({len(results)} total detections)")
+    print(f"  ✓ Standard MOT: {output_file_data}")
+    print(f"  ✓ With classes: {output_with_classes}")
 
 
 
@@ -280,9 +284,10 @@ def main():
     scenes = get_scenes(args.data, args.scenes)
     print(f"Found {len(scenes)} scenes to process")
     
-    # Process each scene
+    # Process each scene with overall progress bar
     processed_scenes = []
-    for scene_name in scenes:
+    for idx, scene_name in enumerate(tqdm(scenes, desc="Overall Progress", unit="scene")):
+        print(f"\n[Scene {idx+1}/{len(scenes)}] Processing {scene_name}...")
         process_scene(
             scene_name=scene_name,
             data_root=args.data,
