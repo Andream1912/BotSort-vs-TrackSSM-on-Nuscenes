@@ -52,12 +52,17 @@ from tqdm import tqdm
 import numpy as np
 from datetime import datetime
 
+
 # Aggiungi project root al path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
 
 from models.autoencoder import D2MP
-from models.mamba_encoder import Mamba_encoder
+from models.condition_embedding import Time_info_aggregation
+
 from models.box_ops import generalized_box_iou, box_cxcywh_to_xyxy
+from dataset.nuscenes_track_dataset import NuScenesTrackDataset, collate_fn
+
 
 
 class Phase2Config:
@@ -86,7 +91,11 @@ class Phase2Config:
         self.loss_bbox_weight = config_dict.get('loss_bbox_weight', 1.0)
         self.loss_iou_weight = config_dict.get('loss_iou_weight', 2.0)
         self.loss_temporal_weight = config_dict.get('loss_temporal_weight', 0.5)
-        
+
+        #Dataset
+        self.train_sample_stride = config_dict.get('train_sample_stride', 5)
+        self.val_sample_stride = config_dict.get('val_sample_stride', 5)
+
         # Device
         self.device = config_dict.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -183,27 +192,25 @@ def train_epoch(model, dataloader, optimizer, scheduler, config, epoch, writer):
     pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{config.max_epochs} [TRAIN - FULL]")
     
     for batch_idx, batch in enumerate(pbar):
-        condition = batch['condition'].to(config.device)
-        cur_bbox = batch['cur_bbox'].to(config.device)
+        # Sposta tutti i tensori del batch su device (come in phase1)
+        for k, v in batch.items():
+            if torch.is_tensor(v):
+                batch[k] = v.to(config.device)
         
-        # Forward pass
         optimizer.zero_grad()
-        loss_dict = model(batch)
+        loss_dict = model(batch)  # D2MP restituisce un dict di loss
         
         # Compute total loss
         if isinstance(loss_dict, dict):
             loss = (config.loss_bbox_weight * loss_dict.get('loss_bbox', 0) +
-                   config.loss_iou_weight * loss_dict.get('loss_iou', 0) +
-                   config.loss_temporal_weight * loss_dict.get('loss_temporal', 0))
+                    config.loss_iou_weight * loss_dict.get('loss_iou', 0) +
+                    config.loss_temporal_weight * loss_dict.get('loss_temporal', 0))
         else:
             loss = loss_dict
         
         # Backward pass
         loss.backward()
-        
-        # Gradient clipping
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
         optimizer.step()
         
         # Update statistics
@@ -243,51 +250,57 @@ def train_epoch(model, dataloader, optimizer, scheduler, config, epoch, writer):
     }
 
 
+
 def validate_epoch(model, dataloader, config, epoch, writer):
-    """Validate for one epoch"""
-    model.eval()
+    """Validate for one epoch (usiamo il branch di loss come in training)"""
+    # Trucco: teniamo il modello in modalità train, ma con no_grad
+    # così forward usa il branch che restituisce le loss.
+    model.train()
     
-    total_loss = 0
-    total_loss_bbox = 0
-    total_loss_iou = 0
+    total_loss = 0.0
+    num_batches = len(dataloader)
     
     pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{config.max_epochs} [VAL]")
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(pbar):
-            condition = batch['condition'].to(config.device)
-            cur_bbox = batch['cur_bbox'].to(config.device)
+            # Sposta tensori su device
+            for k, v in batch.items():
+                if torch.is_tensor(v):
+                    batch[k] = v.to(config.device)
             
-            loss_dict = model(batch)
+            loss_dict = model(batch)  # come in train_epoch
             
+            # Costruiamo la loss totale come in train_epoch
             if isinstance(loss_dict, dict):
                 loss = (config.loss_bbox_weight * loss_dict.get('loss_bbox', 0) +
-                       config.loss_iou_weight * loss_dict.get('loss_iou', 0))
+                        config.loss_iou_weight * loss_dict.get('loss_iou', 0) +
+                        config.loss_temporal_weight * loss_dict.get('loss_temporal', 0))
             else:
+                # fallback, se per qualche motivo non fosse un dict
                 loss = loss_dict
             
-            total_loss += loss.item()
-            if isinstance(loss_dict, dict):
-                total_loss_bbox += loss_dict.get('loss_bbox', 0).item()
-                total_loss_iou += loss_dict.get('loss_iou', 0).item()
+            # Assicuriamoci che sia uno scalare
+            if isinstance(loss, torch.Tensor) and loss.numel() > 1:
+                loss_val = loss.mean().item()
+            else:
+                loss_val = float(loss.item())
             
-            pbar.set_postfix({'val_loss': f'{loss.item():.4f}'})
+            total_loss += loss_val
+            pbar.set_postfix({'val_loss': f'{loss_val:.4f}'})
     
-    # Epoch statistics
-    avg_loss = total_loss / len(dataloader)
-    avg_loss_bbox = total_loss_bbox / len(dataloader)
-    avg_loss_iou = total_loss_iou / len(dataloader)
+    avg_loss = total_loss / max(num_batches, 1)
     
-    # Log to tensorboard
+    # Log su TensorBoard (qui logghiamo solo la loss totale)
     writer.add_scalar('Val/Loss', avg_loss, epoch)
-    writer.add_scalar('Val/Loss_BBox', avg_loss_bbox, epoch)
-    writer.add_scalar('Val/Loss_IoU', avg_loss_iou, epoch)
     
     return {
         'loss': avg_loss,
-        'loss_bbox': avg_loss_bbox,
-        'loss_iou': avg_loss_iou
+        'loss_bbox': 0.0,  # se vuoi loggare anche i componenti, si può estendere
+        'loss_iou': 0.0
     }
+
+
 
 
 def main():
@@ -323,14 +336,66 @@ def main():
     print(f"Tensorboard: {log_dir}")
     print(f"Device: {config.device}")
     print(f"{'='*80}\n")
-    
-    # Initialize model
-    encoder = Mamba_encoder(
-        d_model=config.encoder_dim,
-        n_layer=config.n_layer,
-        vocab_size=config.vocab_size
+
+    # =======================
+    # Dataset & DataLoaders
+    # =======================
+    print("Loading datasets...")
+    train_dataset = NuScenesTrackDataset(
+        data_root=args.data_root,
+        split='train',
+        history_len=config_dict.get('history_len', 5),
+        min_track_len=config_dict.get('min_track_len', 6),
+        normalize=config_dict.get('normalize', True),
+        img_width=config_dict.get('img_width', 1600),
+        img_height=config_dict.get('img_height', 900),
+        sample_stride=config.train_sample_stride,
     )
     
+    val_dataset = NuScenesTrackDataset(
+        data_root=args.data_root,
+        split='val',
+        history_len=config_dict.get('history_len', 5),
+        min_track_len=config_dict.get('min_track_len', 6),
+        normalize=config_dict.get('normalize', True),
+        img_width=config_dict.get('img_width', 1600),
+        img_height=config_dict.get('img_height', 900),
+        sample_stride=config.val_sample_stride,
+    )
+    
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=config_dict.get('num_workers', 4),
+        collate_fn=collate_fn,
+        pin_memory=True
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=config_dict.get('num_workers', 4),
+        collate_fn=collate_fn,
+        pin_memory=True
+    )
+    
+    print(f"✓ Train: {len(train_dataset)} samples ({len(train_loader)} batches)")
+    print(f"✓ Val: {len(val_dataset)} samples ({len(val_loader)} batches)\n")
+
+    # Initialize encoder come in PHASE 1, ma stavolta NON lo freeziamo
+    encoder = Time_info_aggregation(
+        d_model=config.encoder_dim,
+        n_layer=config.n_layer,
+        v_size=8  # bbox(4) + delta_bbox(4)
+    )
+
+    print(f"✓ Encoder initialized: Time_info_aggregation (Phase 2 full fine-tuning)")
+    print(f"  d_model: {config.encoder_dim}")
+    print(f"  n_layer: {config.n_layer}")
+    print(f"  v_size: 8 (bbox + delta)\n")
+
     model = D2MP(config, encoder=encoder, device=config.device)
     model = model.to(config.device)
     
@@ -338,6 +403,7 @@ def main():
     print(f"\nLoading Phase 1 checkpoint: {args.phase1_checkpoint}")
     checkpoint = torch.load(args.phase1_checkpoint, map_location=config.device)
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
     print("✓ Phase 1 checkpoint loaded (decoder already adapted)\n")
     
     # UNFREEZE ALL PARAMETERS (differential LR will handle encoder carefully)
@@ -356,39 +422,79 @@ def main():
         eta_min=1e-7
     )
     
-    print("\n[TODO] Dataset loader not implemented yet")
-    print("Next steps:")
-    print("1. Implement dataset/nuscenes_interpolated_dataset.py")
-    print("2. Run Phase 1 training first to get checkpoint")
-    print("3. Run this script with Phase 1 checkpoint")
-    print("\n[INFO] Training setup complete")
-    print("Once dataset is ready, training will proceed automatically.\n")
+    print("✓ All parameters unfrozen (full model training)")
+    print("✓ Optimizer and scheduler initialized")
+    print(f"  Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"  Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}\n")
     
-    # Placeholder for actual training loop
-    # best_val_loss = float('inf')
-    # patience_counter = 0
-    # 
-    # for epoch in range(config.max_epochs):
-    #     train_metrics = train_epoch(model, train_loader, optimizer, scheduler, config, epoch, writer)
-    #     val_metrics = validate_epoch(model, val_loader, config, epoch, writer)
-    #     
-    #     # Early stopping
-    #     if val_metrics['loss'] < best_val_loss:
-    #         best_val_loss = val_metrics['loss']
-    #         patience_counter = 0
-    #         torch.save({
-    #             'epoch': epoch,
-    #             'model_state_dict': model.state_dict(),
-    #             'optimizer_state_dict': optimizer.state_dict(),
-    #             'val_loss': best_val_loss
-    #         }, output_dir / 'phase2_full_best.pth')
-    #     else:
-    #         patience_counter += 1
-    #         if patience_counter >= config.early_stop_patience:
-    #             print(f"\nEarly stopping at epoch {epoch+1}")
-    #             break
+    # =======================
+    # TRAINING LOOP
+    # =======================
+    print(f"{'='*80}")
+    print("STARTING PHASE 2 TRAINING (FULL MODEL)")
+    print(f"{'='*80}\n")
+    
+    best_val_loss = float('inf')
+    patience_counter = 0
+    
+    for epoch in range(config.max_epochs):
+        print(f"\nEpoch {epoch+1}/{config.max_epochs}")
+        print("-" * 60)
+        
+        # Train
+        train_metrics = train_epoch(model, train_loader, optimizer, scheduler, config, epoch, writer)
+        
+        # Validate
+        val_metrics = validate_epoch(model, val_loader, config, epoch, writer)
+        
+        print(f"Train Loss: {train_metrics['loss']:.4f} | Val Loss: {val_metrics['loss']:.4f}")
+        
+        # Periodic checkpoint ogni 5 epoche (opzionale ma utile)
+        if (epoch + 1) % 5 == 0:
+            periodic_checkpoint = output_dir / f'phase2_full_epoch{epoch+1}.pth'
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': train_metrics['loss'],
+                'val_loss': val_metrics['loss'],
+                'config': config_dict
+            }, periodic_checkpoint)
+            print(f"✓ Periodic checkpoint saved: {periodic_checkpoint}")
+        
+        # Early stopping su val_loss
+        if val_metrics['loss'] < best_val_loss:
+            best_val_loss = val_metrics['loss']
+            patience_counter = 0
+            
+            best_ckpt = output_dir / 'phase2_full_best.pth'
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': best_val_loss,
+                'config': config_dict
+            }, best_ckpt)
+            print(f"✓ Best model saved: {best_ckpt}")
+        else:
+            patience_counter += 1
+            print(f"Early stopping patience: {patience_counter}/{config.early_stop_patience}")
+            
+            if patience_counter >= config.early_stop_patience:
+                print(f"\n{'='*80}")
+                print(f"Early stopping at epoch {epoch+1} (patience={config.early_stop_patience})")
+                print(f"Best val loss: {best_val_loss:.4f}")
+                print(f"{'='*80}")
+                break
+    
+    print(f"\n{'='*80}")
+    print("PHASE 2 TRAINING COMPLETE")
+    print(f"Best checkpoint: {output_dir / 'phase2_full_best.pth'}")
+    print(f"Tensorboard logs: {log_dir}")
+    print(f"{'='*80}\n")
     
     writer.close()
+
 
 
 if __name__ == "__main__":

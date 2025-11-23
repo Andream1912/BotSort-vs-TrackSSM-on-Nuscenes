@@ -31,7 +31,8 @@ class NuScenesTrackDataset(Dataset):
         min_track_len: int = 6,
         normalize: bool = True,
         img_width: int = 1600,
-        img_height: int = 900
+        img_height: int = 900,
+        sample_stride: int = 1
     ):
         """
         Args:
@@ -50,7 +51,7 @@ class NuScenesTrackDataset(Dataset):
         self.normalize = normalize
         self.img_width = img_width
         self.img_height = img_height
-        
+        self.sample_stride = sample_stride
         # Sliding window size: history + 1 current frame
         self.window_size = history_len + 1
         
@@ -125,8 +126,9 @@ class NuScenesTrackDataset(Dataset):
             # Create sliding windows
             # For a track of length L, we can create L - window_size + 1 samples
             num_windows = track_len - self.window_size + 1
-            
-            for start_idx in range(num_windows):
+
+
+            for start_idx in range(0, num_windows, self.sample_stride):
                 self.samples.append((track_idx, start_idx))
     
     def __len__(self) -> int:
