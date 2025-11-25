@@ -21,60 +21,116 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Logs
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# Logs and output
 *.log
 logs/
+*.out
+nohup.out
 
-# Data and Results
+# Data directories (too large, user must prepare locally)
 data/nuscenes_mot_front/
 data/nuscenes_mot_front_7classes/
 data/nuscenes_mot_6cams_interpolated/
 data/nuscenes_test_interpolation/
 data/nuscenes_tracks/
-results/nuscenes_trackssm_pure/
-results/nuscenes_trackssm_7classes/
+data/nuscenes_yolo_7classes/
+data/*.pkl
+data/*.json
+
+# Keep data structure but ignore content
+!data/.gitkeep
+!data/README.md
+
+# Results and experiments (generated during runtime)
 results/
+!results/.gitkeep
+!results/README.md
 
-# Training experiments (model checkpoints)
-experiments/
-weights/
+# Model weights (too large, provide download instructions)
+weights/*.pth
+weights/*.pt
+weights/*.onnx
 !weights/.gitkeep
+!weights/README.md
 
-# Sanity check outputs
-sanity_check_output/
+# Training experiments
+experiments/
+checkpoints/
+runs/
 
-# IDE
+# IDE and editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.project
+.pydevproject
+.settings/
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
+*.bak
+*~
 
 # Temporary files
 *.tmp
-*.bak
+*.temp
 *_BACKUP/
+*_OLD/
+.cache/
+
+# Documentation artifacts
 EVALUATION_COMPLETE.md
 NEXT_STEPS_7CLASSES.md
 
-# Model weights (too large for GitHub)
-*.pth
-*.pt
-!weights/.gitkeep
-
-# External dependencies (should be cloned separately)
+# External dependencies (should be installed separately)
 external/YOLOX/
 external/TrackEval/
 external/deep-person-reid/
 external/fast_reid/
+YOLOX/
+!external/.gitkeep
+!external/README.md
 
-# Miniconda
+# Conda/Miniconda
 miniconda3/
+.conda/
 
-# Cache
-.cache/
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.pytest_cache/
+nosetests.xml
+coverage.xml
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Videos (large files)
+*.mp4
+*.avi
+*.mov
+!docs/demo.mp4
+
+# Archive folders
+archive/
+archived/
+production/

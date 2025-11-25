@@ -14,7 +14,6 @@ import cv2
 import torch
 import numpy as np
 import json
-import subprocess
 from pathlib import Path
 from tqdm import tqdm
 
@@ -25,6 +24,7 @@ sys.path.insert(0, os.path.join(project_root, 'external', 'YOLOX'))
 
 from src.detectors.yolox_detector import YOLOXDetector
 from src.trackers.tracker_factory import TrackerFactory
+from src.evaluation.mot_evaluator import NuScenesMultiClassEvaluator
 
 
 def parse_args():
@@ -37,7 +37,9 @@ def parse_args():
     
     # Data paths
     parser.add_argument('--data', type=str, required=True,
-                       help='Path to dataset (e.g., data/nuscenes_mot_front/val)')
+                       help='Path to dataset with images (e.g., data/nuscenes_mot_front/val)')
+    parser.add_argument('--gt-data', type=str, default=None,
+                       help='Path to GT dataset for evaluation (default: data/nuscenes_mot_front_7classes/val)')
     parser.add_argument('--output', type=str, required=True,
                        help='Output directory for tracking results')
     
@@ -57,6 +59,10 @@ def parse_args():
                        help='Track confidence threshold')
     parser.add_argument('--match-thresh', type=float, default=0.5,
                        help='Matching IoU threshold')
+    parser.add_argument('--max-age', type=int, default=30,
+                       help='Maximum frames to keep lost track (default: 30)')
+    parser.add_argument('--min-hits', type=int, default=3,
+                       help='Minimum hits before track is activated (default: 3)')
     parser.add_argument('--trackssm-checkpoint', type=str,
                        default='weights/trackssm/phase2/phase2_full_best.pth',
                        help='TrackSSM checkpoint path (default: Phase2 NuScenes fine-tuned)')
@@ -79,9 +85,9 @@ def parse_args():
     
     # Evaluation
     parser.add_argument('--evaluate', action='store_true',
-                       help='Automatically evaluate after tracking (compute HOTA, CLEAR, Identity)')
-    parser.add_argument('--per-class-metrics', action='store_true',
-                       help='Compute per-class metrics (requires seqinfo.ini - usually not needed)')
+                       help='Run evaluation after tracking (uses 7-class GT automatically)')
+    parser.add_argument('--iou-threshold', type=float, default=0.5,
+                       help='IoU threshold for evaluation matching (default: 0.5)')
     parser.add_argument('--metrics-output', type=str, default=None,
                        help='Output file for metrics JSON (default: {output}/metrics.json)')
     
@@ -191,25 +197,16 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
                 'class_id': track['class_id']
             })
     
-    # Write results in two formats:
-    # 1. With original classes (for analysis)
-    # 2. With unified class=1 (for TrackEval)
-    
-    # Format 1: With classes
-    output_with_classes = Path(output_dir) / 'with_classes' / f"{scene_name}.txt"
-    output_with_classes.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_with_classes, 'w') as f:
+    # Write results in MOT format with 7-class NuScenes IDs
+    # Save in data/ subdirectory for evaluation
+    output_file = Path(output_dir) / 'data' / f"{scene_name}.txt"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, 'w') as f:
         for r in results:
+            # MOT format: frame,id,x,y,w,h,conf,class,visibility,unused (10 columns)
+            # class_id is native NuScenes (1=car, 2=truck, 3=bus, 4=trailer, 5=pedestrian, 6=motorcycle, 7=bicycle)
             f.write(f"{r['frame']},{r['track_id']},{r['bbox'][0]:.2f},{r['bbox'][1]:.2f},"
-                   f"{r['bbox'][2]:.2f},{r['bbox'][3]:.2f},{r['confidence']:.4f},{r['class_id']},1\n")
-    
-    # Format 2: Unified class (for TrackEval) - save in data/ subdirectory
-    output_file_data = Path(output_dir) / 'data' / f"{scene_name}.txt"
-    output_file_data.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file_data, 'w') as f:
-        for r in results:
-            f.write(f"{r['frame']},{r['track_id']},{r['bbox'][0]:.2f},{r['bbox'][1]:.2f},"
-                   f"{r['bbox'][2]:.2f},{r['bbox'][3]:.2f},{r['confidence']:.4f},1,1\n")
+                   f"{r['bbox'][2]:.2f},{r['bbox'][3]:.2f},{r['confidence']:.4f},{r['class_id']},1,-1\n")
     
     # Release video writer if used
     if video_writer is not None:
@@ -218,8 +215,7 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
     
     num_unique_tracks = len(set(r['track_id'] for r in results))
     print(f"  ✓ Saved {num_unique_tracks} unique tracks ({len(results)} total detections)")
-    print(f"  ✓ Standard MOT: {output_file_data}")
-    print(f"  ✓ With classes: {output_with_classes}")
+    print(f"  ✓ Results: {output_file}")
 
 
 
@@ -257,8 +253,8 @@ def main():
         'match_thresh': args.match_thresh,
         'img_width': 1600,
         'img_height': 900,
-        'max_age': 30,
-        'min_hits': 3
+        'max_age': args.max_age,
+        'min_hits': args.min_hits
     }
     
     # Add TrackSSM-specific config
@@ -347,8 +343,8 @@ def main():
             'tracker_config': {
                 'track_thresh': args.track_thresh,
                 'match_thresh': args.match_thresh,
-                'max_age': 30,
-                'min_hits': 3
+                'max_age': args.max_age,
+                'min_hits': args.min_hits
             },
             'device': args.device
         }
@@ -379,76 +375,106 @@ def main():
         with open(config_file, 'w') as f:
             json.dump(config_data, f, indent=2)
         
-        # Run evaluation
-        eval_cmd = [
-            sys.executable,
-            os.path.join(project_root, 'evaluate.py'),
-            '--gt', args.data,
-            '--results', args.output,
-            '--output', metrics_file,
-            '--seqmap', temp_seqmap,
-            '--config', config_file  # Pass config to evaluation
-        ]
+        # Run evaluation with custom multi-class evaluator
+        print("\n" + "="*80)
+        print("RUNNING MULTI-CLASS EVALUATION")
+        print("="*80)
         
-        # Add per-class flag only if requested
-        if args.per_class_metrics:
-            eval_cmd.append('--per-class')
+        # Determine GT path (default to 7-class dataset)
+        gt_path = args.gt_data if args.gt_data else 'data/nuscenes_mot_front_7classes/val'
+        
+        print(f"GT dataset:     {gt_path}")
+        print(f"Predictions:    {args.output}/data/")
+        print(f"IoU threshold:  {args.iou_threshold}")
+        print()
         
         try:
-            result = subprocess.run(eval_cmd, check=True, capture_output=False)
+            # Create evaluator
+            evaluator = NuScenesMultiClassEvaluator(
+                gt_folder=gt_path,
+                pred_folder=os.path.join(args.output, 'data'),
+                iou_threshold=args.iou_threshold
+            )
             
-            # Load and display summary from summary file
+            # Get scene list from seqmap
+            scene_list = []
+            with open(temp_seqmap) as f:
+                lines = f.readlines()[1:]  # Skip header
+                scene_list = [line.strip() for line in lines if line.strip()]
+            
+            print(f"Evaluating {len(scene_list)} scenes...")
+            
+            # Run evaluation
+            results = evaluator.evaluate_all(scene_list=scene_list)
+            
+            # Add experiment config
+            results['experiment_config'] = config_data
+            
+            # Save results
+            evaluator.save_results(results, Path(metrics_file))
+            
+            # Display summary
+            summary = results['summary']
+            
+            print("\n" + "="*80)
+            print("EVALUATION SUMMARY")
+            print("="*80)
+            
+            print(f"\nMOTA:      {summary['mota']*100:>6.2f}%")
+            print(f"Precision: {summary['precision']*100:>6.2f}%")
+            print(f"Recall:    {summary['recall']*100:>6.2f}%")
+            print(f"IDSW:      {summary['idsw']:>6d}")
+            
+            print(f"\nTP:  {summary['tp']:>6d}")
+            print(f"FP:  {summary['fp']:>6d}")
+            print(f"FN:  {summary['fn']:>6d}")
+            
+            print(f"\nGT detections:    {summary['gt_count']:>6d}")
+            print(f"Pred detections:  {summary['pred_count']:>6d}")
+            print(f"GT IDs:           {summary['gt_ids']:>6d}")
+            print(f"Pred IDs:         {summary['pred_ids']:>6d}")
+            
+            # Per-class summary
+            if 'class_metrics' in summary:
+                print(f"\n{'='*80}")
+                print("PER-CLASS METRICS")
+                print(f"{'='*80}")
+                print(f"{'Class':<15} {'GT':<8} {'Pred':<8} {'TP':<8} {'MOTA%':<10} {'Recall%':<10}")
+                print(f"{'-'*80}")
+                
+                for cls_id, class_data in sorted(summary['class_metrics'].items()):
+                    class_name = class_data.get('class_name', f'class-{cls_id}')
+                    if class_data['gt'] > 0:  # Only show classes present in GT
+                        print(f"{class_name:<15} {class_data['gt']:<8} {class_data['pred']:<8} "
+                              f"{class_data['tp']:<8} {class_data['mota']*100:<10.2f} {class_data['recall']*100:<10.2f}")
+            
+            print(f"\n✓ Full metrics: {metrics_file}")
+            
+            # Create summary file
             summary_file = os.path.join(os.path.dirname(metrics_file), 
                                        f"{os.path.splitext(os.path.basename(metrics_file))[0]}_summary.json")
+            with open(summary_file, 'w') as f:
+                summary_compact = {
+                    'MOTA': summary['mota'],
+                    'Precision': summary['precision'],
+                    'Recall': summary['recall'],
+                    'IDSW': summary['idsw'],
+                    'FP': summary['fp'],
+                    'FN': summary['fn'],
+                    'Total_GT_IDs': summary['gt_ids'],
+                    'Total_Predicted_IDs': summary['pred_ids'],
+                    'Total_GT_Dets': summary['gt_count'],
+                    'Total_Predicted_Dets': summary['pred_count'],
+                }
+                json.dump(summary_compact, f, indent=2)
             
-            if os.path.exists(summary_file):
-                with open(summary_file, 'r') as f:
-                    summary = json.load(f)
-                
-                print("\n" + "="*80)
-                print("EVALUATION SUMMARY")
-                print("="*80)
-                
-                if 'HOTA' in summary:
-                    print(f"\n✓ HOTA: {summary['HOTA']:.4f}")
-                
-                if 'MOTA' in summary:
-                    print(f"✓ MOTA: {summary['MOTA']:.4f}")
-                
-                if 'IDF1' in summary:
-                    print(f"✓ IDF1: {summary['IDF1']:.4f}")
-                
-                if 'IDSW' in summary:
-                    print(f"✓ ID Switches: {summary['IDSW']}")
-                
-                if 'FP' in summary and 'FN' in summary:
-                    print(f"\nFP: {summary['FP']} | FN: {summary['FN']}")
-                
-                if 'Precision' in summary and 'Recall' in summary:
-                    print(f"Precision: {summary['Precision']:.4f} | Recall: {summary['Recall']:.4f}")
-                
-                if 'Total_GT_IDs' in summary and 'Total_Predicted_IDs' in summary:
-                    print(f"\nTracked IDs: {summary['Total_Predicted_IDs']} / {summary['Total_GT_IDs']} GT")
-                
-                print(f"\n✓ Full metrics: {metrics_file}")
-                print(f"✓ Summary: {summary_file}")
-                
-                # Check per-class metrics
-                per_class_file = os.path.join(os.path.dirname(metrics_file), 
-                                             f"{os.path.splitext(os.path.basename(metrics_file))[0]}_per_class.json")
-                if os.path.exists(per_class_file):
-                    with open(per_class_file, 'r') as f:
-                        per_class = json.load(f)
-                    if per_class:
-                        print(f"✓ Per-class metrics: {per_class_file}")
-                        print(f"  Classes evaluated: {', '.join(per_class.keys())}")
-                
-                print("="*80)
+            print(f"✓ Summary: {summary_file}")
+            print("="*80)
         
-        except subprocess.CalledProcessError as e:
-            print(f"\n⚠️  Evaluation failed with error code {e.returncode}")
         except Exception as e:
             print(f"\n⚠️  Evaluation error: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == '__main__':

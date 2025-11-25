@@ -25,7 +25,8 @@ class YOLOXDetector:
     """YOLOX detector wrapper - shared by all trackers"""
     
     def __init__(self, model_path: str, conf_thresh: float = 0.1, 
-                 nms_thresh: float = 0.65, device: str = 'cuda'):
+                 nms_thresh: float = 0.65, device: str = 'cuda', test_size: tuple = (1280, 1280),
+                 model_name: str = None):
         """
         Initialize YOLOX detector.
         
@@ -34,6 +35,8 @@ class YOLOXDetector:
             conf_thresh: Confidence threshold (default: 0.1)
             nms_thresh: NMS threshold (default: 0.65)
             device: Device for inference
+            test_size: Input size for inference (default: 640x640)
+            model_name: Model variant (yolox-s/m/l/x, auto-detect from path if None)
         """
         if not YOLOX_AVAILABLE:
             raise ImportError("YOLOX not installed. Install with: pip install yolox")
@@ -44,9 +47,23 @@ class YOLOXDetector:
         self.device = device
         self.conf_thresh = conf_thresh
         self.nms_thresh = nms_thresh
+        self.test_size = test_size
         
-        # Load YOLOX-X model
-        exp = get_exp(None, "yolox-x")
+        # Auto-detect model variant from path
+        if model_name is None:
+            if 'yolox_l' in model_path.lower():
+                model_name = 'yolox-l'
+            elif 'yolox_x' in model_path.lower():
+                model_name = 'yolox-x'
+            elif 'yolox_m' in model_path.lower():
+                model_name = 'yolox-m'
+            elif 'yolox_s' in model_path.lower():
+                model_name = 'yolox-s'
+            else:
+                model_name = 'yolox-x'  # default
+        
+        # Load YOLOX model
+        exp = get_exp(None, model_name)
         self.model = exp.get_model()
         self.model.to(device)
         self.model.eval()
@@ -84,7 +101,7 @@ class YOLOXDetector:
         """
         # Preprocess
         img_info = {"height": img.shape[0], "width": img.shape[1]}
-        img_preprocessed, _ = self.preprocess(img, None, (640, 640))
+        img_preprocessed, _ = self.preprocess(img, None, self.test_size)
         img_tensor = torch.from_numpy(img_preprocessed).unsqueeze(0).float().to(self.device)
         
         # Inference
@@ -102,7 +119,7 @@ class YOLOXDetector:
         
         # Convert to standard detection format
         detections = []
-        ratio = min(640 / img_info["height"], 640 / img_info["width"])
+        ratio = min(self.test_size[0] / img_info["height"], self.test_size[1] / img_info["width"])
         
         outputs = outputs.cpu().numpy()
         for detection in outputs:
@@ -127,7 +144,7 @@ class YOLOXDetector:
             detections.append({
                 'bbox': [x, y, w, h],
                 'confidence': float(obj_conf * class_conf),
-                'class_id': nuscenes_class
+                'class_id': nuscenes_class  # Use native 7-class NuScenes IDs
             })
         
         return detections

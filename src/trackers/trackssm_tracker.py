@@ -49,6 +49,10 @@ class Track:
         # State flags
         self.is_activated = False  # Track confirmed after N hits
         self.is_lost = False
+        
+        # Activate immediately if min_hits <= 1
+        if self.hits >= self.min_hits:
+            self.is_activated = True
     
     def update(self, bbox, frame_id, confidence=1.0):
         """Update track with new detection"""

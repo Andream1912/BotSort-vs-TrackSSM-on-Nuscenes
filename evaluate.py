@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Unified Evaluation Script - Compute HOTA metrics for any tracker
+Multi-Class MOT Evaluation Script
+
+Supports NuScenes 7-class schema:
+- 1: car, 2: truck, 3: bus, 4: trailer, 5: pedestrian, 6: motorcycle, 7: bicycle
+
+Generates aggregate + per-class metrics (MOTA, Precision, Recall, IDSW, etc.)
 
 Usage:
-    python evaluate.py --gt data/nuscenes_mot_front/val --results results/trackssm --output metrics/trackssm.json
-    python evaluate.py --gt data/nuscenes_mot_front/val --results results/botsort --output metrics/botsort.json
+    python evaluate.py --gt data/nuscenes_mot_front_7classes/val --results results/trackssm/data --output metrics/trackssm.json
 """
 
 import os
@@ -13,32 +17,133 @@ import argparse
 import json
 from pathlib import Path
 
-# Add TrackEval to path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(project_root, 'external', 'TrackEval'))
+# Add project to path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
 
-import trackeval
+from src.evaluation.mot_evaluator import NuScenesMultiClassEvaluator
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Unified tracker evaluation')
+    parser = argparse.ArgumentParser(description='Multi-class MOT evaluation')
     
     parser.add_argument('--gt', type=str, required=True,
-                       help='Path to GT directory (e.g., data/nuscenes_mot_front/val)')
+                       help='Path to GT directory (e.g., data/nuscenes_mot_front_7classes/val)')
     parser.add_argument('--results', type=str, required=True,
-                       help='Path to tracking results directory')
+                       help='Path to tracking results directory (expects data/ subfolder)')
     parser.add_argument('--output', type=str, required=True,
                        help='Output JSON file for metrics')
-    parser.add_argument('--seqmap', type=str, default='seqmaps/val.txt',
-                       help='Sequence map file (default: seqmaps/val.txt)')
-    parser.add_argument('--quiet', action='store_true',
-                       help='Suppress verbose output')
-    parser.add_argument('--per-class', action='store_true',
-                       help='Compute per-class metrics (requires with_classes/ directory)')
+    parser.add_argument('--seqmap', type=str, default=None,
+                       help='Sequence map file (optional, will evaluate all if not provided)')
+    parser.add_argument('--iou-threshold', type=float, default=0.5,
+                       help='IoU threshold for matching (default: 0.5)')
     parser.add_argument('--config', type=str, default=None,
-                       help='Path to experiment config JSON file')
+                       help='Path to experiment config JSON file (for metadata)')
     
     return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    
+    print("="*80)
+    print("MULTI-CLASS MOT EVALUATION")
+    print("="*80)
+    print(f"GT folder:      {args.gt}")
+    print(f"Results folder: {args.results}")
+    print(f"IoU threshold:  {args.iou_threshold}")
+    print()
+    
+    # Ensure results path points to data/ subfolder
+    results_path = Path(args.results)
+    if not (results_path / 'data').exists() and results_path.name != 'data':
+        results_path = results_path / 'data'
+    
+    print(f"Using predictions from: {results_path}")
+    
+    # Create evaluator
+    evaluator = NuScenesMultiClassEvaluator(
+        gt_folder=args.gt,
+        pred_folder=str(results_path),
+        iou_threshold=args.iou_threshold
+    )
+    
+    # Load scene list if provided
+    scene_list = None
+    if args.seqmap and Path(args.seqmap).exists():
+        with open(args.seqmap) as f:
+            lines = f.readlines()[1:]  # Skip header
+            scene_list = [line.strip() for line in lines if line.strip()]
+        print(f"Evaluating {len(scene_list)} scenes from seqmap")
+    
+    # Run evaluation
+    results = evaluator.evaluate_all(scene_list=scene_list)
+    
+    # Add experiment config if provided
+    if args.config and Path(args.config).exists():
+        with open(args.config) as f:
+            results['experiment_config'] = json.load(f)
+    
+    # Save results
+    output_path = Path(args.output)
+    evaluator.save_results(results, output_path)
+    
+    # Print summary
+    summary = results['summary']
+    print("\n" + "="*80)
+    print("EVALUATION SUMMARY")
+    print("="*80)
+    print(f"\nMOTA:      {summary['mota']*100:>6.2f}%")
+    print(f"Precision: {summary['precision']*100:>6.2f}%")
+    print(f"Recall:    {summary['recall']*100:>6.2f}%")
+    print(f"IDSW:      {summary['idsw']:>6d}")
+    print(f"\nTP:  {summary['tp']:>6d}")
+    print(f"FP:  {summary['fp']:>6d}")
+    print(f"FN:  {summary['fn']:>6d}")
+    print(f"\nGT detections:    {summary['gt_count']:>6d}")
+    print(f"Pred detections:  {summary['pred_count']:>6d}")
+    print(f"GT IDs:           {summary['gt_ids']:>6d}")
+    print(f"Pred IDs:         {summary['pred_ids']:>6d}")
+    
+    # Per-class summary
+    if 'class_metrics' in summary:
+        print(f"\n{'='*80}")
+        print("PER-CLASS METRICS")
+        print(f"{'='*80}")
+        print(f"{'Class':<15} {'GT':<8} {'Pred':<8} {'TP':<8} {'MOTA%':<10} {'Recall%':<10}")
+        print(f"{'-'*80}")
+        
+        for cls_id, class_data in sorted(summary['class_metrics'].items()):
+            class_name = class_data.get('class_name', f'class-{cls_id}')
+            if class_data['gt'] > 0:  # Only show classes present in GT
+                print(f"{class_name:<15} {class_data['gt']:<8} {class_data['pred']:<8} "
+                      f"{class_data['tp']:<8} {class_data['mota']*100:<10.2f} {class_data['recall']*100:<10.2f}")
+    
+    print(f"\n✓ Full results saved to: {output_path}")
+    
+    # Create summary file
+    summary_file = output_path.parent / f"{output_path.stem}_summary.json"
+    with open(summary_file, 'w') as f:
+        # Extract key metrics for compatibility
+        summary_compact = {
+            'MOTA': summary['mota'],
+            'Precision': summary['precision'],
+            'Recall': summary['recall'],
+            'IDSW': summary['idsw'],
+            'FP': summary['fp'],
+            'FN': summary['fn'],
+            'Total_GT_IDs': summary['gt_ids'],
+            'Total_Predicted_IDs': summary['pred_ids'],
+            'Total_GT_Dets': summary['gt_count'],
+            'Total_Predicted_Dets': summary['pred_count'],
+        }
+        json.dump(summary_compact, f, indent=2)
+    
+    print(f"✓ Summary saved to: {summary_file}")
+
+
+if __name__ == '__main__':
+    main()
 
 
 def create_seqmap(gt_dir, output_file):
@@ -98,6 +203,10 @@ def evaluate_tracking(gt_dir, results_dir, seqmap_file, output_file, quiet=False
         'SEQ_INFO': None,
         'SEQMAP_FILE': seqmap_file,
         'SKIP_SPLIT_FOL': True,
+        # CRITICAL: Evaluate all NuScenes 7 classes with correct ID mapping
+        # NuScenes: 1=car, 2=truck, 3=bus, 4=trailer, 5=pedestrian, 6=motorcycle, 7=bicycle
+        'CLASSES_TO_EVAL': ['car', 'truck', 'bus', 'trailer', 'pedestrian', 'motorcycle', 'bicycle'],
+        'DISTRACTOR_CLASSES': [],  # Don't ignore any class
     }
     
     # Metrics to compute
