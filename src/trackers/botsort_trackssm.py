@@ -133,6 +133,7 @@ class BoTSORTTrackSSM(BaseTracker):
         args.new_track_thresh = config.get('new_track_thresh', 0.5)
         args.track_buffer = config.get('max_age', config.get('track_buffer', 30))  # max_age → track_buffer
         args.match_thresh = config.get('match_thresh', 0.8)
+        args.min_hits_override = config.get('min_hits', 1)  # For activation logic
         args.proximity_thresh = config.get('proximity_thresh', 0.5)
         args.appearance_thresh = config.get('appearance_thresh', 0.25)
         args.cmc_method = config.get('cmc_method', 'sparseOptFlow')
@@ -152,7 +153,7 @@ class BoTSORTTrackSSM(BaseTracker):
         
         # Initialize BoT-SORT with multi-class support
         print(f"Initializing BoT-SORT+TrackSSM with ReID={args.with_reid}, CMC={args.cmc_method}")
-        print(f"  Parameters: track_thresh={args.track_high_thresh}, match_thresh={args.match_thresh}, max_age={args.track_buffer}")
+        print(f"  Parameters: track_thresh={args.track_high_thresh}, match_thresh={args.match_thresh}, max_age={args.track_buffer}, min_hits={args.min_hits_override}")
         self.tracker = BoTSORT_Multi(args, frame_rate=self.frame_rate)
         
         # CRITICAL FIX: Replace BOTH kalman_filter AND STrack.shared_kalman
@@ -170,8 +171,9 @@ class BoTSORTTrackSSM(BaseTracker):
     
     def _patch_strack_methods(self):
         """
-        Patch STrack methods to pass track_id to motion predictor.
-        This is necessary because BoT-SORT's STrack doesn't pass track_id to KalmanFilter.
+        Patch STrack methods to:
+        1. Pass track_id to motion predictor (for TrackSSM)
+        2. Implement min_hits activation logic
         """
         from tracker.mc_bot_sort import STrack
         
@@ -180,6 +182,12 @@ class BoTSORTTrackSSM(BaseTracker):
         original_activate = STrack.activate
         original_re_activate = STrack.re_activate
         original_update = STrack.update
+        
+        # Get min_hits from config
+        min_hits = self.args.min_hits_override
+        
+        # Store in class for access in patched methods
+        STrack._min_hits_threshold = min_hits
         
         # Create reference to trackssm_motion for closures
         trackssm_motion = self.trackssm_motion
@@ -201,9 +209,14 @@ class BoTSORTTrackSSM(BaseTracker):
             )
         
         def patched_activate(self, kalman_filter, frame_id):
-            """Patched activate that passes track_id, class_id, and confidence"""
+            """Patched activate that passes track_id, class_id, and confidence + implements min_hits"""
             self.kalman_filter = kalman_filter
             self.track_id = self.next_id()
+            
+            # Initialize hit counter for min_hits logic
+            if not hasattr(self, 'hits'):
+                self.hits = 1  # First detection
+            
             # FIXED: Pass track_id, class_id, and confidence to TrackSSM
             self.mean, self.covariance = self.kalman_filter.initiate(
                 self.tlwh_to_xywh(self._tlwh), 
@@ -213,8 +226,14 @@ class BoTSORTTrackSSM(BaseTracker):
             )
             self.tracklet_len = 0
             self.state = 1  # TrackState.Tracked
-            if frame_id == 1:
+            
+            # Activation logic with min_hits
+            min_hits_threshold = getattr(STrack, '_min_hits_threshold', 1)
+            if frame_id == 1 or self.hits >= min_hits_threshold:
                 self.is_activated = True
+            else:
+                self.is_activated = False  # Wait for more hits
+                
             self.frame_id = frame_id
             self.start_frame = frame_id
         
@@ -237,9 +256,14 @@ class BoTSORTTrackSSM(BaseTracker):
                 self.track_id = self.next_id()
         
         def patched_update(self, new_track, frame_id):
-            """Patched update that passes track_id, class_id, and confidence"""
+            """Patched update that passes track_id, class_id, confidence + increments hits for min_hits"""
             self.frame_id = frame_id
             self.tracklet_len += 1
+            
+            # Increment hit counter
+            if not hasattr(self, 'hits'):
+                self.hits = 1
+            self.hits += 1
 
             new_tlwh = new_track.tlwh
 
@@ -255,7 +279,12 @@ class BoTSORTTrackSSM(BaseTracker):
                 self.update_features(new_track.curr_feat)
 
             self.state = 1  # TrackState.Tracked
-            self.is_activated = True
+            
+            # Activate track once min_hits threshold is reached
+            min_hits_threshold = getattr(STrack, '_min_hits_threshold', 1)
+            if self.hits >= min_hits_threshold:
+                self.is_activated = True
+            
             self.score = new_track.score
         
         def patched_multi_predict(stracks):
@@ -341,8 +370,14 @@ class BoTSORTTrackSSM(BaseTracker):
                 online_targets = self.tracker.update(dets, dummy_frame)
         
         # Convert output to our format
+        # Apply is_activated filter if min_hits > 1 (proper track confirmation)
+        min_hits_threshold = getattr(self.args, 'min_hits_override', 1)
         tracks = []
         for t in online_targets:
+            # Filter by is_activated if min_hits > 1
+            if min_hits_threshold > 1 and not t.is_activated:
+                continue
+                
             # BoT-SORT output: tlwh format
             x1, y1, w, h = t.tlwh
             track_dict = {
@@ -350,7 +385,7 @@ class BoTSORTTrackSSM(BaseTracker):
                 'bbox': [float(x1), float(y1), float(w), float(h)],
                 'class_id': int(t.cls),
                 'confidence': float(t.score),
-                'is_activated': True
+                'is_activated': bool(t.is_activated)
             }
             tracks.append(track_dict)
         

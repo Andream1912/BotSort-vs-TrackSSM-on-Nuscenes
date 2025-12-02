@@ -38,6 +38,7 @@ class BotSortTracker(BaseTracker):
         args.new_track_thresh = config.get('new_track_thresh', 0.5)
         args.track_buffer = config.get('max_age', config.get('track_buffer', 30))  # max_age → track_buffer
         args.match_thresh = config.get('match_thresh', 0.8)
+        args.min_hits_override = config.get('min_hits', 3)  # BoTSORT default was 3
         args.proximity_thresh = config.get('proximity_thresh', 0.5)
         args.appearance_thresh = config.get('appearance_thresh', 0.25)
         args.cmc_method = config.get('cmc_method', 'sparseOptFlow')  # sparseOptFlow, orb, ecc
@@ -107,8 +108,14 @@ class BotSortTracker(BaseTracker):
             online_targets = self.tracker.update(dets, frame)
         
         # Convert tracks back to our format
+        # Apply is_activated filter if min_hits > 1 (proper track confirmation)
+        min_hits_threshold = getattr(self.args, 'min_hits_override', 3)
         output_tracks = []
         for track in online_targets:
+            # Filter by is_activated if min_hits > 1
+            if min_hits_threshold > 1 and not track.is_activated:
+                continue
+                
             # BoT-SORT returns STrack objects
             tlwh = track.tlwh  # [x, y, w, h]
             track_id = track.track_id
@@ -119,7 +126,8 @@ class BotSortTracker(BaseTracker):
                 'track_id': track_id,
                 'bbox': tlwh.tolist(),
                 'class_id': cls_id,
-                'confidence': score
+                'confidence': score,
+                'is_activated': bool(track.is_activated)
             })
         
         return output_tracks

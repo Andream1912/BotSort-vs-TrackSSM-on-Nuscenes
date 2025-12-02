@@ -112,6 +112,13 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
     scene_path = Path(data_root) / scene_name
     img_dir = scene_path / 'img1'
     
+    # Handle NuScenes naming: if scene-XXXX doesn't exist, try scene-XXXX_CAM_FRONT
+    if not scene_path.exists():
+        scene_path_cam = Path(data_root) / f"{scene_name}_CAM_FRONT"
+        if scene_path_cam.exists():
+            scene_path = scene_path_cam
+            img_dir = scene_path / 'img1'
+    
     if not img_dir.exists():
         print(f"⚠️  Image directory not found: {img_dir}")
         return
