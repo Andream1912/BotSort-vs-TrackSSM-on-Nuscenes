@@ -39,6 +39,7 @@ class GTDetector:
                     continue
                 
                 frame_id = int(parts[0])
+                # DON'T extract track_id - we want tracker to do real tracking!
                 x, y, w, h = map(float, parts[2:6])
                 conf = float(parts[6]) if len(parts) > 6 else 1.0
                 class_id = int(parts[7]) if len(parts) > 7 else 1
@@ -50,6 +51,7 @@ class GTDetector:
                     'bbox': [x, y, w, h],
                     'confidence': conf,
                     'class_id': class_id
+                    # NO track_id - let the tracker assign IDs!
                 })
         
         self.gt_cache[scene_name] = scene_gt
@@ -63,7 +65,7 @@ class GTDetector:
             frame_id: Frame number (1-indexed)
         
         Returns:
-            List of detections with bbox, confidence, class_id
+            List of detections with bbox, confidence, class_id (NO track_id - tracker assigns IDs)
         """
         # Load scene GT if not cached
         if scene_name not in self.gt_cache:

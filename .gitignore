@@ -42,6 +42,7 @@ data/nuscenes_mot_6cams_interpolated/
 data/nuscenes_test_interpolation/
 data/nuscenes_tracks/
 data/nuscenes_yolo_7classes/
+data/nuscenes_yolox_detector/
 data/*.pkl
 data/*.json
 
@@ -54,10 +55,17 @@ results/
 !results/.gitkeep
 !results/README.md
 
+# Failed experiments and analysis artifacts
+results/TRYING_TO_REDUCE_IDSW/
+results/IDSW_ANALYSIS/
+
 # Model weights (too large, provide download instructions)
-weights/*.pth
-weights/*.pt
-weights/*.onnx
+weights/**/*.pth
+weights/**/*.pt
+weights/**/*.onnx
+weights/detectors/
+weights/reid/
+weights/trackssm/
 !weights/.gitkeep
 !weights/README.md
 
@@ -98,6 +106,7 @@ external/YOLOX/
 external/TrackEval/
 external/deep-person-reid/
 external/fast_reid/
+external/BoT-SORT/
 YOLOX/
 !external/.gitkeep
 !external/README.md

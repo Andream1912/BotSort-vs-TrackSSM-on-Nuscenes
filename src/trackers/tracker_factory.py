@@ -29,24 +29,18 @@ class TrackerFactory:
         tracker_type = tracker_type.lower()
         
         if tracker_type == 'trackssm':
-            from src.trackers.trackssm_wrapper import TrackSSMTracker
-            
-            # Load TrackSSM model
-            if 'model' not in config:
-                config['model'] = TrackerFactory._load_trackssm_model(
-                    config.get('checkpoint_path'),
-                    config.get('device', 'cuda')
-                )
-            
-            return TrackSSMTracker(config)
+            # BoT-SORT with TrackSSM motion predictor (correct approach!)
+            from src.trackers.botsort_trackssm import BoTSORTTrackSSM
+            return BoTSORTTrackSSM(config)
         
         elif tracker_type == 'botsort':
+            # BoT-SORT with Kalman Filter (baseline)
             from src.trackers.botsort_tracker import BotSortTracker
             return BotSortTracker(config)
         
         else:
             raise ValueError(f"Unknown tracker type: {tracker_type}. "
-                           f"Supported: trackssm, botsort")
+                           f"Supported: trackssm (BoT-SORT+TrackSSM), botsort (BoT-SORT+Kalman)")
     
     @staticmethod
     def _load_trackssm_model(checkpoint_path: str, device: str):

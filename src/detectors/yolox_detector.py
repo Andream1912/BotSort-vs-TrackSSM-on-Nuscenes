@@ -26,7 +26,7 @@ class YOLOXDetector:
     
     def __init__(self, model_path: str, conf_thresh: float = 0.1, 
                  nms_thresh: float = 0.65, device: str = 'cuda', test_size: tuple = (1280, 1280),
-                 model_name: str = None):
+                 model_name: str = None, num_classes: int = None):
         """
         Initialize YOLOX detector.
         
@@ -37,6 +37,7 @@ class YOLOXDetector:
             device: Device for inference
             test_size: Input size for inference (default: 640x640)
             model_name: Model variant (yolox-s/m/l/x, auto-detect from path if None)
+            num_classes: Number of classes (None=auto-detect from checkpoint, 80=COCO, 7=nuScenes)
         """
         if not YOLOX_AVAILABLE:
             raise ImportError("YOLOX not installed. Install with: pip install yolox")
@@ -64,6 +65,20 @@ class YOLOXDetector:
         
         # Load YOLOX model
         exp = get_exp(None, model_name)
+        
+        # Auto-detect num_classes from checkpoint if not specified
+        if num_classes is None:
+            ckpt_temp = torch.load(model_path, map_location='cpu')
+            if 'model' in ckpt_temp and 'head.cls_preds.0.bias' in ckpt_temp['model']:
+                num_classes = ckpt_temp['model']['head.cls_preds.0.bias'].shape[0]
+                print(f"Auto-detected {num_classes} classes from checkpoint")
+            else:
+                num_classes = 80  # Default COCO
+            del ckpt_temp
+        
+        exp.num_classes = num_classes
+        exp.test_size = test_size  # Set test size in exp
+        self.num_classes = num_classes
         self.model = exp.get_model()
         self.model.to(device)
         self.model.eval()
@@ -72,12 +87,12 @@ class YOLOXDetector:
         print(f"Loading YOLOX from {model_path}...")
         ckpt = torch.load(model_path, map_location=device)
         self.model.load_state_dict(ckpt["model"])
-        print(f"✓ Loaded YOLOX-X checkpoint")
+        print(f"✓ Loaded YOLOX-X checkpoint with {num_classes} classes at {test_size}")
         
         self.model = fuse_model(self.model)
         self.preprocess = ValTransform(legacy=False)
         
-        # COCO to NuScenes class mapping
+        # COCO to NuScenes class mapping (only for 80-class COCO models)
         # COCO: 0=person, 1=bicycle, 2=car, 3=motorcycle, 5=bus, 7=truck
         # NuScenes: 1=car, 2=truck, 3=bus, 4=trailer, 5=pedestrian, 6=motorcycle, 7=bicycle
         self.coco_to_nuscenes = {
@@ -88,6 +103,9 @@ class YOLOXDetector:
             5: 3,  # bus
             7: 2,  # truck
         }
+        
+        # Check if we need class mapping
+        self.use_class_mapping = (num_classes == 80)  # Only map for COCO models
     
     def detect(self, img: np.ndarray) -> List[Dict[str, Any]]:
         """
@@ -109,7 +127,7 @@ class YOLOXDetector:
             outputs = self.model(img_tensor)
             outputs = postprocess(
                 outputs, 
-                num_classes=80,  # COCO classes
+                num_classes=self.num_classes,  # Use actual model classes
                 conf_thre=self.conf_thresh,
                 nms_thre=self.nms_thresh
             )[0]
@@ -134,12 +152,15 @@ class YOLOXDetector:
             # Convert to xywh format
             x, y, w, h = x1, y1, x2 - x1, y2 - y1
             
-            # Map COCO class to NuScenes
-            coco_class = int(class_id)
-            if coco_class not in self.coco_to_nuscenes:
-                continue  # Skip irrelevant classes
-            
-            nuscenes_class = self.coco_to_nuscenes[coco_class]
+            # Map COCO class to NuScenes (only for 80-class models)
+            if self.use_class_mapping:
+                coco_class = int(class_id)
+                if coco_class not in self.coco_to_nuscenes:
+                    continue  # Skip irrelevant classes
+                nuscenes_class = self.coco_to_nuscenes[coco_class]
+            else:
+                # Already in nuScenes format (7-class model)
+                nuscenes_class = int(class_id) + 1  # Convert from 0-indexed to 1-indexed
             
             detections.append({
                 'bbox': [x, y, w, h],

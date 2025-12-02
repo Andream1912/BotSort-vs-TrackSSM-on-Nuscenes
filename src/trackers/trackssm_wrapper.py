@@ -30,6 +30,7 @@ class TrackSSMTracker(BaseTracker):
         max_age = config.get('max_age', 30)
         min_hits = config.get('min_hits', 3)
         history_len = config.get('history_len', 5)
+        oracle_mode = config.get('oracle_mode', False)  # GT track IDs mode
         
         # Initialize actual tracker
         self.tracker = TrackSSMTrackerImpl(
@@ -41,7 +42,8 @@ class TrackSSMTracker(BaseTracker):
             match_thresh=match_thresh,
             max_age=max_age,
             min_hits=min_hits,
-            history_len=history_len
+            history_len=history_len,
+            oracle_mode=False  # Always False: GT dets should be tracked normally
         )
     
     def update(self, detections: List[Dict], frame: Any = None) -> List[Dict]:

@@ -1,2 +1,0 @@
-name
-scene-0003_CAM_FRONT

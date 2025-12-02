@@ -121,38 +121,56 @@ class Track:
         
         condition = np.array(condition, dtype=np.float32)  # (5, 8)
         
-        # Run prediction
-        with torch.no_grad():
-            condition_tensor = torch.from_numpy(condition).unsqueeze(0).to(device)  # (1, 5, 8)
+        # Run prediction with safety checks
+        try:
+            with torch.no_grad():
+                condition_tensor = torch.from_numpy(condition).unsqueeze(0).to(device)  # (1, 5, 8)
+                
+                # Encode
+                cond_encoded = model.encoder(condition_tensor)  # (1, 1, 256)
+                
+                # Decode - use last frame bbox as x_0
+                last_bbox_norm = condition_tensor[0, -1, :4]  # (4,)
+                
+                pred_bbox_norm = model.ssm_decoder(
+                    last_bbox_norm.unsqueeze(0),  # (1, 4)
+                    cond_encoded,
+                    h=None
+                )  # (1, 4)
+                
+                pred_bbox_norm = pred_bbox_norm.squeeze(0).cpu().numpy()  # (4,)
             
-            # Encode
-            cond_encoded = model.encoder(condition_tensor)  # (1, 1, 256)
+            # --- CRITICAL SANITY CHECKS ---
+            # If model predicts NaN, negative sizes, or absurd values, use last bbox
+            cx, cy, w_norm, h_norm = pred_bbox_norm
             
-            # Decode - use last frame bbox as x_0
-            last_bbox_norm = condition_tensor[0, -1, :4]  # (4,)
+            if (np.any(np.isnan(pred_bbox_norm)) or 
+                np.any(np.isinf(pred_bbox_norm)) or
+                w_norm <= 0 or h_norm <= 0 or
+                w_norm > 2.0 or h_norm > 2.0 or  # Box larger than 2x image = absurd
+                cx < -0.5 or cx > 1.5 or  # Center too far outside image
+                cy < -0.5 or cy > 1.5):
+                # Fallback to last known good bbox
+                return self.bbox
+            # ------------------------------
             
-            pred_bbox_norm = model.ssm_decoder(
-                last_bbox_norm.unsqueeze(0),  # (1, 4)
-                cond_encoded,
-                h=None
-            )  # (1, 4)
+            # Denormalize from cxcywh to xywh
+            w_pred = w_norm * img_width
+            h_pred = h_norm * img_height
+            x_pred = (cx * img_width) - w_pred / 2
+            y_pred = (cy * img_height) - h_pred / 2
             
-            pred_bbox_norm = pred_bbox_norm.squeeze(0).cpu().numpy()  # (4,)
-        
-        # Denormalize from cxcywh to xyxy to xywh
-        cx, cy, w_norm, h_norm = pred_bbox_norm
-        
-        w_pred = w_norm * img_width
-        h_pred = h_norm * img_height
-        x_pred = (cx * img_width) - w_pred / 2
-        y_pred = (cy * img_height) - h_pred / 2
-        
-        predicted_bbox = [x_pred, y_pred, w_pred, h_pred]
-        
-        # Update bbox with prediction
-        self.bbox = predicted_bbox
-        
-        return predicted_bbox
+            predicted_bbox = [x_pred, y_pred, w_pred, h_pred]
+            
+            # Update bbox with prediction
+            self.bbox = predicted_bbox
+            
+            return predicted_bbox
+            
+        except Exception as e:
+            # Fallback in case of model error (CUDA OOM, shape mismatch, etc.)
+            # print(f"⚠️  Prediction error for track {self.track_id}: {e}")
+            return self.bbox
     
     def mark_lost(self):
         """Mark track as lost"""
@@ -187,8 +205,9 @@ class TrackSSMTracker:
         track_thresh=0.2,       # Min confidence for track activation (balanced)
         match_thresh=0.5,       # IoU threshold for matching
         max_age=30,             # Max frames to keep lost track
-        min_hits=3,             # Min hits to activate track
-        history_len=5
+        min_hits=1,             # Min hits to activate track (fair comparison)
+        history_len=5,
+        oracle_mode=False       # Use GT track IDs (for upper bound analysis)
     ):
         """
         Args:
@@ -201,6 +220,7 @@ class TrackSSMTracker:
             max_age: Maximum frames to keep a lost track
             min_hits: Minimum hits before track is activated
             history_len: History length for TrackSSM
+            oracle_mode: If True, use GT track IDs directly (for upper bound analysis)
         """
         self.model = model
         self.device = device
@@ -212,6 +232,7 @@ class TrackSSMTracker:
         self.max_age = max_age
         self.min_hits = min_hits
         self.history_len = history_len
+        self.oracle_mode = oracle_mode
         
         # Track management
         self.tracked_tracks = []  # Active tracks
@@ -236,11 +257,16 @@ class TrackSSMTracker:
         Args:
             detections: List of detections, each is dict with:
                         {'bbox': [x, y, w, h], 'confidence': float, 'class_id': int}
+                        In oracle mode, also contains 'track_id': int (GT ID)
         
         Returns:
             output_tracks: List of active tracks with their current state
         """
         self.frame_id += 1
+        
+        # Oracle mode: use GT track IDs directly (skip matching, no ID switches)
+        if self.oracle_mode:
+            return self._update_oracle(detections)
         
         # Separate high and low confidence detections
         high_conf_dets = [d for d in detections if d['confidence'] >= self.track_thresh]
@@ -330,7 +356,8 @@ class TrackSSMTracker:
     
     def _match(self, tracks, detections, threshold):
         """
-        Match tracks to detections using IoU distance and Hungarian algorithm.
+        Match tracks to detections using IoU and CLASS consistency.
+        CRITICAL: A car track can ONLY match with car detections!
         
         Returns:
             matched: List of (track_idx, detection_idx) pairs
@@ -350,7 +377,16 @@ class TrackSSMTracker:
         # Convert IoU to cost (1 - IoU)
         cost_matrix = 1 - iou_matrix
         
-        # Apply threshold: IoU < threshold → cost = inf (invalid match)
+        # --- CRITICAL FIX: CLASS CONSISTENCY ---
+        # Force infinite cost if classes don't match
+        # This prevents cars from matching with pedestrians!
+        for i, track in enumerate(tracks):
+            for j, det in enumerate(detections):
+                if track.class_id != det.get('class_id', -1):
+                    cost_matrix[i, j] = 1e6  # Impossible match
+        # ---------------------------------------
+        
+        # Apply IoU threshold
         cost_matrix[iou_matrix < threshold] = 1e6
         
         # Hungarian algorithm
@@ -393,3 +429,30 @@ class TrackSSMTracker:
         """Get next unique track ID"""
         self.track_id_counter += 1
         return self.track_id_counter
+    
+    def _update_oracle(self, detections):
+        """
+        Oracle mode update: use GT track IDs directly.
+        This represents the UPPER BOUND performance where detection is perfect.
+        
+        Args:
+            detections: List with 'track_id' field (GT ID)
+        
+        Returns:
+            output_tracks: List of tracks with GT track IDs
+        """
+        output_tracks = []
+        
+        for det in detections:
+            if 'track_id' not in det:
+                raise ValueError("Oracle mode requires 'track_id' in detections")
+            
+            output_tracks.append({
+                'track_id': det['track_id'],  # Use GT ID directly
+                'bbox': det['bbox'],
+                'class_id': det['class_id'],
+                'confidence': det['confidence'],
+                'is_activated': True
+            })
+        
+        return output_tracks

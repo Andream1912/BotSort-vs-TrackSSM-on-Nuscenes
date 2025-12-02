@@ -36,10 +36,10 @@ def parse_args():
                        help='Tracker to use')
     
     # Data paths
-    parser.add_argument('--data', type=str, required=True,
+    parser.add_argument('--data', type=str, default= 'data/nuscenes_mot_front/val',
                        help='Path to dataset with images (e.g., data/nuscenes_mot_front/val)')
     parser.add_argument('--gt-data', type=str, default=None,
-                       help='Path to GT dataset for evaluation (default: data/nuscenes_mot_front_7classes/val)')
+                       help='Path to GT dataset for evaluation (default: data/nuscenes_mot_front/val)')
     parser.add_argument('--output', type=str, required=True,
                        help='Output directory for tracking results')
     
@@ -49,19 +49,19 @@ def parse_args():
     parser.add_argument('--detector-weights', type=str,
                        default='weights/detectors/yolox_x.pth',
                        help='Path to YOLOX weights')
-    parser.add_argument('--conf-thresh', type=float, default=0.1,
+    parser.add_argument('--conf-thresh', type=float, default=0.7,
                        help='Detection confidence threshold')
     parser.add_argument('--nms-thresh', type=float, default=0.65,
                        help='NMS threshold')
     
     # Tracker config
-    parser.add_argument('--track-thresh', type=float, default=0.2,
+    parser.add_argument('--track-thresh', type=float, default=0.7,
                        help='Track confidence threshold')
-    parser.add_argument('--match-thresh', type=float, default=0.5,
+    parser.add_argument('--match-thresh', type=float, default=0.7,
                        help='Matching IoU threshold')
     parser.add_argument('--max-age', type=int, default=30,
                        help='Maximum frames to keep lost track (default: 30)')
-    parser.add_argument('--min-hits', type=int, default=3,
+    parser.add_argument('--min-hits', type=int, default=1,
                        help='Minimum hits before track is activated (default: 3)')
     parser.add_argument('--trackssm-checkpoint', type=str,
                        default='weights/trackssm/phase2/phase2_full_best.pth',
@@ -241,7 +241,8 @@ def main():
             model_path=args.detector_weights,
             conf_thresh=args.conf_thresh,
             nms_thresh=args.nms_thresh,
-            device=args.device
+            device=args.device,
+            test_size=(896, 1600)  # Multiple of 32 for YOLOX (H, W)
         )
     
     # Initialize tracker
@@ -261,7 +262,7 @@ def main():
     if args.tracker == 'trackssm':
         # Select checkpoint: MOT17 pretrained (Phase1) or NuScenes fine-tuned (Phase2)
         if args.use_mot17_checkpoint:
-            checkpoint_path = 'weights/trackssm/phase1/phase1_decoder_best.pth'
+            checkpoint_path = 'weights/trackssm/pretrained/MOT17_epoch160.pt'
             checkpoint_type = 'MOT17 pretrained (Phase1)'
             print(f"  Using {checkpoint_type}")
         else:
@@ -269,9 +270,10 @@ def main():
             checkpoint_type = 'NuScenes fine-tuned (Phase2)'
             print(f"  Using {checkpoint_type}")
         
-        tracker_config['checkpoint_path'] = checkpoint_path
+        tracker_config['trackssm_weights'] = checkpoint_path  # Fixed: use correct key
         tracker_config['checkpoint_type'] = checkpoint_type
         tracker_config['history_len'] = 5
+        tracker_config['oracle_mode'] = args.use_gt_det  # Use GT track IDs in oracle mode
     
     tracker = TrackerFactory.create(args.tracker, tracker_config)
     
@@ -307,6 +309,29 @@ def main():
     print("\n" + "="*80)
     print(f"✓ Tracking complete! Results saved to: {args.output}")
     print("="*80)
+    
+    # Print TrackSSM diagnostics if using trackssm tracker
+    if args.tracker == 'trackssm':
+        try:
+            motion = tracker.trackssm_motion
+            print("\n" + "="*80)
+            print("🔍 TRACKSSM DIAGNOSTICS")
+            print("="*80)
+            print(f"predict_calls:          {motion.n_predict_calls}")
+            print(f"model_calls:            {motion.n_model_calls}")
+            print(f"successful_predictions: {motion.n_successful_predictions}")
+            print(f"fallback_no_history:    {motion.n_fallback_no_history}")
+            print(f"fallback_sanity:        {motion.n_fallback_sanity}")
+            print(f"exceptions:             {motion.n_exceptions}")
+            print("")
+            if motion.n_predict_calls > 0:
+                success_rate = 100.0 * motion.n_successful_predictions / motion.n_predict_calls
+                model_call_rate = 100.0 * motion.n_model_calls / motion.n_predict_calls
+                print(f"Success rate:  {success_rate:.1f}% ({motion.n_successful_predictions}/{motion.n_predict_calls})")
+                print(f"Model usage:   {model_call_rate:.1f}% ({motion.n_model_calls}/{motion.n_predict_calls})")
+            print("="*80)
+        except Exception as e:
+            print(f"\n⚠️  Could not print TrackSSM diagnostics: {e}")
     
     # Automatic evaluation if requested
     if args.evaluate:
@@ -375,100 +400,72 @@ def main():
         with open(config_file, 'w') as f:
             json.dump(config_data, f, indent=2)
         
-        # Run evaluation with custom multi-class evaluator
+        # Run evaluation with TrackEval (HOTA, DetA, AssA, IDF1, MOTA, CLEAR, Identity - 37 metrics)
         print("\n" + "="*80)
-        print("RUNNING MULTI-CLASS EVALUATION")
+        print("RUNNING TRACKEVAL (37 METRICS)")
         print("="*80)
         
         # Determine GT path (default to 7-class dataset)
-        gt_path = args.gt_data if args.gt_data else 'data/nuscenes_mot_front_7classes/val'
+        gt_path = args.gt_data if args.gt_data else 'data/nuscenes_mot_front/val'
         
         print(f"GT dataset:     {gt_path}")
         print(f"Predictions:    {args.output}/data/")
-        print(f"IoU threshold:  {args.iou_threshold}")
+        print(f"Output:         {metrics_file}")
         print()
         
         try:
-            # Create evaluator
-            evaluator = NuScenesMultiClassEvaluator(
-                gt_folder=gt_path,
-                pred_folder=os.path.join(args.output, 'data'),
-                iou_threshold=args.iou_threshold
-            )
+            # Use evaluate.py with TrackEval for complete metrics
+            import subprocess
+            eval_cmd = [
+                sys.executable, 'evaluate.py',
+                '--gt-folder', gt_path,
+                '--results-folder', os.path.join(args.output, 'data'),
+                '--output-file', metrics_file,
+                '--seqmap-file', temp_seqmap
+            ]
             
-            # Get scene list from seqmap
-            scene_list = []
-            with open(temp_seqmap) as f:
-                lines = f.readlines()[1:]  # Skip header
-                scene_list = [line.strip() for line in lines if line.strip()]
+            print(f"Running: {' '.join(eval_cmd)}")
+            result = subprocess.run(eval_cmd, capture_output=False, text=True)
             
-            print(f"Evaluating {len(scene_list)} scenes...")
-            
-            # Run evaluation
-            results = evaluator.evaluate_all(scene_list=scene_list)
-            
-            # Add experiment config
-            results['experiment_config'] = config_data
-            
-            # Save results
-            evaluator.save_results(results, Path(metrics_file))
-            
-            # Display summary
-            summary = results['summary']
-            
-            print("\n" + "="*80)
-            print("EVALUATION SUMMARY")
-            print("="*80)
-            
-            print(f"\nMOTA:      {summary['mota']*100:>6.2f}%")
-            print(f"Precision: {summary['precision']*100:>6.2f}%")
-            print(f"Recall:    {summary['recall']*100:>6.2f}%")
-            print(f"IDSW:      {summary['idsw']:>6d}")
-            
-            print(f"\nTP:  {summary['tp']:>6d}")
-            print(f"FP:  {summary['fp']:>6d}")
-            print(f"FN:  {summary['fn']:>6d}")
-            
-            print(f"\nGT detections:    {summary['gt_count']:>6d}")
-            print(f"Pred detections:  {summary['pred_count']:>6d}")
-            print(f"GT IDs:           {summary['gt_ids']:>6d}")
-            print(f"Pred IDs:         {summary['pred_ids']:>6d}")
-            
-            # Per-class summary
-            if 'class_metrics' in summary:
-                print(f"\n{'='*80}")
-                print("PER-CLASS METRICS")
-                print(f"{'='*80}")
-                print(f"{'Class':<15} {'GT':<8} {'Pred':<8} {'TP':<8} {'MOTA%':<10} {'Recall%':<10}")
-                print(f"{'-'*80}")
+            if result.returncode == 0:
+                print("\n✅ Evaluation completed successfully")
                 
-                for cls_id, class_data in sorted(summary['class_metrics'].items()):
-                    class_name = class_data.get('class_name', f'class-{cls_id}')
-                    if class_data['gt'] > 0:  # Only show classes present in GT
-                        print(f"{class_name:<15} {class_data['gt']:<8} {class_data['pred']:<8} "
-                              f"{class_data['tp']:<8} {class_data['mota']*100:<10.2f} {class_data['recall']*100:<10.2f}")
+                # Load and display summary
+                if os.path.exists(metrics_file):
+                    with open(metrics_file, 'r') as f:
+                        eval_results = json.load(f)
+                    
+                    # Add experiment config to metrics file
+                    eval_results['experiment_config'] = config_data
+                    with open(metrics_file, 'w') as f:
+                        json.dump(eval_results, f, indent=2)
+                    
+                    print(f"\n✓ Full metrics saved: {metrics_file}")
+                    print(f"  (includes HOTA, DetA, AssA, IDF1, MOTA, MOTP, MT, ML, IDSW, and 28 more metrics)")
+                else:
+                    print(f"\n⚠️  Metrics file not created: {metrics_file}")
+            else:
+                print(f"\n⚠️  Evaluation failed with return code {result.returncode}")
+                print("   Falling back to basic metrics...")
+                
+                # Fallback to basic evaluator
+                evaluator = NuScenesMultiClassEvaluator(
+                    gt_folder=gt_path,
+                    pred_folder=os.path.join(args.output, 'data'),
+                    iou_threshold=args.iou_threshold
+                )
+                
+                scene_list = []
+                with open(temp_seqmap) as f:
+                    lines = f.readlines()[1:]
+                    scene_list = [line.strip() for line in lines if line.strip()]
+                
+                results = evaluator.evaluate_all(scene_list=scene_list)
+                results['experiment_config'] = config_data
+                evaluator.save_results(results, Path(metrics_file))
+                
+                print(f"\n✓ Basic metrics saved: {metrics_file}")
             
-            print(f"\n✓ Full metrics: {metrics_file}")
-            
-            # Create summary file
-            summary_file = os.path.join(os.path.dirname(metrics_file), 
-                                       f"{os.path.splitext(os.path.basename(metrics_file))[0]}_summary.json")
-            with open(summary_file, 'w') as f:
-                summary_compact = {
-                    'MOTA': summary['mota'],
-                    'Precision': summary['precision'],
-                    'Recall': summary['recall'],
-                    'IDSW': summary['idsw'],
-                    'FP': summary['fp'],
-                    'FN': summary['fn'],
-                    'Total_GT_IDs': summary['gt_ids'],
-                    'Total_Predicted_IDs': summary['pred_ids'],
-                    'Total_GT_Dets': summary['gt_count'],
-                    'Total_Predicted_Dets': summary['pred_count'],
-                }
-                json.dump(summary_compact, f, indent=2)
-            
-            print(f"✓ Summary: {summary_file}")
             print("="*80)
         
         except Exception as e:
