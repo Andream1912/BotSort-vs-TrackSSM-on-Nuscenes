@@ -76,23 +76,33 @@ class MotChallenge2DBox(_BaseDataset):
         self.output_sub_fol = self.config["OUTPUT_SUB_FOLDER"]
 
         # Get classes to eval
-        self.valid_classes = ["pedestrian"]
+        # Support both 7 separate classes and 2 aggregated classes for NuScenes
+        self.valid_classes = ["pedestrian", "car", "truck", "bus", "trailer", "motorcycle", "bicycle"]
         self.class_list = [
             cls.lower() if cls.lower() in self.valid_classes else None
             for cls in self.config["CLASSES_TO_EVAL"]
         ]
         if not all(self.class_list):
             raise TrackEvalException(
-                "Attempted to evaluate an invalid class. Only pedestrian class is valid."
+                "Attempted to evaluate an invalid class. Valid classes: " + ", ".join(self.valid_classes)
             )
+        # Map NuScenes classes to IDs (1-7 for separate classes)
         self.class_name_to_class_id = {
             "pedestrian": 1,
+            "car": 2,
+            "truck": 3,
+            "trailer": 4,
+            "bus": 5,
+            "motorcycle": 6,
+            "bicycle": 7,
+            # Aliases
+            "person": 1,
+            "vehicle": 2,  # If someone uses 'vehicle', map to car
+            # MOTChallenge original classes (not used in NuScenes)
             "person_on_vehicle": 2,
-            "car": 3,
-            "bicycle": 4,
-            "motorbike": 5,
-            "non_mot_vehicle": 6,
-            "static_person": 7,
+            "motorbike": 6,
+            "non_mot_vehicle": 2,
+            "static_person": 1,
             "distractor": 8,
             "occluder": 9,
             "occluder_on_ground": 10,
@@ -445,12 +455,8 @@ class MotChallenge2DBox(_BaseDataset):
             tracker_confidences = raw_data["tracker_confidences"][t]
             similarity_scores = raw_data["similarity_scores"][t]
 
-            # Evaluation is ONLY valid for pedestrian class
-            if len(tracker_classes) > 0 and np.max(tracker_classes) > 1:
-                raise TrackEvalException(
-                    "Evaluation is only valid for pedestrian class. Non pedestrian class (%i) found in sequence %s at "
-                    "timestep %i." % (np.max(tracker_classes), raw_data["seq"], t)
-                )
+            # Multi-class evaluation supported for NuScenes
+            # Check removed to allow all valid classes (1-7)
 
             # Match tracker and gt dets (with hungarian algorithm) and remove tracker dets which match with gt dets
             # which are labeled as belonging to a distractor class.

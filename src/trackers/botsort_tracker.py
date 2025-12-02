@@ -32,10 +32,11 @@ class BotSortTracker(BaseTracker):
         
         # Create args namespace for BoTSORT
         args = Namespace()
-        args.track_high_thresh = config.get('track_high_thresh', 0.6)
+        # Map unified parameters to BoT-SORT naming
+        args.track_high_thresh = config.get('track_thresh', config.get('track_high_thresh', 0.6))
         args.track_low_thresh = config.get('track_low_thresh', 0.1)
         args.new_track_thresh = config.get('new_track_thresh', 0.5)
-        args.track_buffer = config.get('track_buffer', 30)
+        args.track_buffer = config.get('max_age', config.get('track_buffer', 30))  # max_age → track_buffer
         args.match_thresh = config.get('match_thresh', 0.8)
         args.proximity_thresh = config.get('proximity_thresh', 0.5)
         args.appearance_thresh = config.get('appearance_thresh', 0.25)
