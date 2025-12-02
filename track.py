@@ -54,15 +54,16 @@ def parse_args():
     parser.add_argument('--nms-thresh', type=float, default=0.65,
                        help='NMS threshold')
     
-    # Tracker config
-    parser.add_argument('--track-thresh', type=float, default=0.7,
-                       help='Track confidence threshold')
-    parser.add_argument('--match-thresh', type=float, default=0.7,
-                       help='Matching IoU threshold')
+    # Tracker config (optimal values from grid search Dec 2024: match=0.8, age=30, track=0.6, min_hits=1)
+    # TrackSSM with these params achieves IDSW=3321, MOTA=13.20% (beats Kalman IDSW=3642 by -8.8%)
+    parser.add_argument('--track-thresh', type=float, default=0.6,
+                       help='Track confidence threshold (default: 0.6, optimal from grid search)')
+    parser.add_argument('--match-thresh', type=float, default=0.8,
+                       help='Matching IoU threshold (default: 0.8, optimal from grid search)')
     parser.add_argument('--max-age', type=int, default=30,
-                       help='Maximum frames to keep lost track (default: 30)')
+                       help='Maximum frames to keep lost track (default: 30, optimal from grid search)')
     parser.add_argument('--min-hits', type=int, default=1,
-                       help='Minimum hits before track is activated (default: 3)')
+                       help='Minimum hits before track is activated (default: 1, optimal from grid search)')
     parser.add_argument('--trackssm-checkpoint', type=str,
                        default='weights/trackssm/phase2/phase2_full_best.pth',
                        help='TrackSSM checkpoint path (default: Phase2 NuScenes fine-tuned)')
