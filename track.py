@@ -47,19 +47,19 @@ def parse_args():
     parser.add_argument('--use-gt-det', action='store_true',
                        help='Use ground truth detections instead of YOLOX (oracle mode)')
     parser.add_argument('--detector-weights', type=str,
-                       default='weights/detectors/yolox_x.pth',
-                       help='Path to YOLOX weights')
-    parser.add_argument('--conf-thresh', type=float, default=0.7,
-                       help='Detection confidence threshold')
+                       default='yolox_finetuning/yolox_l_nuscenes_clean_v2/epoch_10.pth',
+                       help='Path to YOLOX weights (default: NuScenes fine-tuned)')
+    parser.add_argument('--conf-thresh', type=float, default=0.3,
+                       help='Detection confidence threshold (optimal: 0.3)')
     parser.add_argument('--nms-thresh', type=float, default=0.65,
                        help='NMS threshold')
     
-    # Tracker config (optimal values from grid search Dec 2024: match=0.8, age=30, track=0.6, min_hits=1)
-    # TrackSSM with these params achieves IDSW=3321, MOTA=13.20% (beats Kalman IDSW=3642 by -8.8%)
+    # Tracker config (optimal values from grid search Dec 2024: match=0.85, age=30, track=0.6, conf=0.3)
+    # TrackSSM + fine-tuned detector achieves IDSW=2646, MOTA=33.85% (beats BotSort IDSW=2754 by -3.9%)
     parser.add_argument('--track-thresh', type=float, default=0.6,
-                       help='Track confidence threshold (default: 0.6, optimal from grid search)')
-    parser.add_argument('--match-thresh', type=float, default=0.8,
-                       help='Matching IoU threshold (default: 0.8, optimal from grid search)')
+                       help='Track confidence threshold (optimal: 0.6)')
+    parser.add_argument('--match-thresh', type=float, default=0.85,
+                       help='Matching IoU threshold (optimal: 0.85, KEY parameter!)')
     parser.add_argument('--max-age', type=int, default=30,
                        help='Maximum frames to keep lost track (default: 30, optimal from grid search)')
     parser.add_argument('--min-hits', type=int, default=1,

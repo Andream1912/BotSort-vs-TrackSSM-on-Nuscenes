@@ -82,6 +82,7 @@ yolox_finetuning/weights/
 yolox_finetuning/*.log
 !yolox_finetuning/training_clean_v2.log
 yolox_finetuning/.nfs*
+yolox_finetuning/launcher.log
 
 # IDE and editors
 .vscode/
