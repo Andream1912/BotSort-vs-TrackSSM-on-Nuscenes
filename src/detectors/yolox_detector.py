@@ -86,7 +86,12 @@ class YOLOXDetector:
         # Load checkpoint
         print(f"Loading YOLOX from {model_path}...")
         ckpt = torch.load(model_path, map_location=device)
-        self.model.load_state_dict(ckpt["model"])
+        # Use strict=False to ignore incompatible keys (e.g., from different num_classes)
+        missing, unexpected = self.model.load_state_dict(ckpt["model"], strict=False)
+        if missing:
+            print(f"⚠️  Missing keys in checkpoint: {len(missing)}")
+        if unexpected:
+            print(f"⚠️  Unexpected keys in checkpoint: {len(unexpected)}")
         print(f"✓ Loaded YOLOX-X checkpoint with {num_classes} classes at {test_size}")
         
         self.model = fuse_model(self.model)

@@ -250,7 +250,8 @@ def main():
             conf_thresh=args.conf_thresh,
             nms_thresh=args.nms_thresh,
             device=args.device,
-            test_size=(896, 1600)  # Multiple of 32 for YOLOX (H, W)
+            test_size=(800, 1440),  # NuScenes fine-tuned resolution
+            num_classes=7  # NuScenes 7 classes (vs COCO 80)
         )
     
     # Initialize tracker

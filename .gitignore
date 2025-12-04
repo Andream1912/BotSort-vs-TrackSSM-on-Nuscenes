@@ -74,6 +74,15 @@ experiments/
 checkpoints/
 runs/
 
+# YOLOX fine-tuning outputs (checkpoints are too large)
+yolox_finetuning/**/*.pth
+yolox_finetuning/yolox_l_nuscenes_*/
+yolox_finetuning/runs/
+yolox_finetuning/weights/
+yolox_finetuning/*.log
+!yolox_finetuning/training_clean_v2.log
+yolox_finetuning/.nfs*
+
 # IDE and editors
 .vscode/
 .idea/
