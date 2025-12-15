@@ -3,6 +3,7 @@
 
 import os
 import math
+import torch
 from yolox.exp import Exp as MyExp
 
 
@@ -15,34 +16,34 @@ class Exp(MyExp):
         self.width = 1.0
         self.num_classes = 7
         
-        # Training settings - SMOOTH CONVERGENCE V2
+        # Training settings - ULTRA STABLE V3
         self.max_epoch = 30  # Extended training for better convergence
-        self.warmup_epochs = 2  # Più lungo per stabilizzare inizialmente
-        self.no_aug_epochs = 5  # Disattiva augmentation ultime 5 epoche (epoch 25-30)
+        self.warmup_epochs = 3  # Warmup più lungo (3 epoche) per stabilizzazione iniziale
+        self.no_aug_epochs = 8  # Ultime 8 epoche senza aug (epoch 22-30) per fine-tune smooth
         
         # Data settings
-        self.data_num_workers = 0  # Single thread to avoid index conflicts (same as v2)
+        self.data_num_workers = 0  # Single thread to avoid index conflicts
         # Match NuScenes aspect ratio (900x1600)
         self.input_size = (800, 1440)
         self.test_size = (800, 1440)
         self.random_size = (14, 20)  # Keep aspect ratio during multi-scale
         
-        # Batch and learning rate - OPTIMIZED for stability
-        self.batch_size = 32  # 4x larger than v2 -> more stable
-        self.basic_lr_per_img = 0.0008 / 64.0  # Ridotto 20% per meno oscillazioni
+        # Batch and learning rate - ULTRA STABLE
+        self.batch_size = 32  # Large batch for gradient stability
+        self.basic_lr_per_img = 0.0006 / 64.0  # Ridotto 40% (era 0.001) per convergenza smooth
         self.warmup_lr = 0
-        self.min_lr_ratio = 0.05  # Decay meno aggressivo per stabilità finale
+        self.min_lr_ratio = 0.10  # Decay molto più graduale (era 0.01)
         
-        # Data augmentation - REDUCED per meno varianza
-        self.mosaic_prob = 0.3  # Ridotto da 0.5 -> meno varianza
-        self.mixup_prob = 0.3   # Ridotto da 0.5 -> meno varianza
-        self.hsv_prob = 0.5
-        self.flip_prob = 0.5
-        self.degrees = 5.0
-        self.translate = 0.1
-        self.mosaic_scale = (0.8, 1.2)
-        self.mixup_scale = (0.8, 1.2)
-        self.shear = 1.0
+        # Data augmentation - MINIMAL per massima stabilità
+        self.mosaic_prob = 0.2  # Ridotto ulteriormente da 0.3 -> 0.2
+        self.mixup_prob = 0.15  # Ridotto molto da 0.3 -> 0.15
+        self.hsv_prob = 0.4     # Ridotto leggermente per meno varianza colore
+        self.flip_prob = 0.5    # OK, flip è stabile
+        self.degrees = 3.0      # Ridotto da 5.0 -> rotazione più conservativa
+        self.translate = 0.08   # Ridotto da 0.1 -> traslazione più conservativa
+        self.mosaic_scale = (0.85, 1.15)  # Range più stretto
+        self.mixup_scale = (0.85, 1.15)   # Range più stretto
+        self.shear = 0.5        # Ridotto da 1.0 -> shear più conservativo
         self.enable_mixup = True
         
         # Optimization
@@ -50,23 +51,19 @@ class Exp(MyExp):
         self.weight_decay = 5e-4
         
         # Scheduler - COSINE ANNEALING for smooth decay
-        self.scheduler = "yoloxwarmcos"
+        self.scheduler = "yoloxwarmcos"  # YOLOX's cosine annealing with warmup
         
         # Eval
         self.eval_interval = 1  # Run validation every epoch
-        self.test_conf = 0.01
-        self.nmsthre = 0.65  # YOLOX's cosine annealing with warmup
-        
-        # Eval
         self.test_conf = 0.01
         self.nmsthre = 0.65
         
         # Output
         self.output_dir = "./yolox_finetuning"
-        self.exp_name = "yolox_l_nuscenes_smooth"
+        self.exp_name = "yolox_l_nuscenes_stable"  # V3: Ultra stable configuration
         
-        # Data paths
-        self.data_dir = "data/nuscenes_yolox_detector"
+        # Data paths - ABSOLUTE PATHS
+        self.data_dir = "/user/amarino/tesi_project_amarino/data/nuscenes_yolox_detector"
         self.train_ann = "train.json"
         self.val_ann = "val.json"
         
@@ -159,7 +156,7 @@ class Exp(MyExp):
         valdataset = COCODataset(
             data_dir=self.data_dir,
             json_file=self.val_ann,
-            name="val",
+            name="val2017",  # Use val2017 symlink for images
             img_size=self.test_size,
             preproc=ValTransform(legacy=legacy),
         )

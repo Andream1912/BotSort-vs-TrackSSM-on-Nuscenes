@@ -1,6 +1,6 @@
 # Multi-Object Tracking System: TrackSSM & BotSort on NuScenes
 
-> **Unified MOT framework comparing state-of-the-art trackers (TrackSSM, BotSort) on the NuScenes autonomous driving dataset with comprehensive evaluation and flexible detection modes.**
+> **Unified MOT framework comparing state-of-the-art trackers (TrackSSM, BotSort) on the NuScenes autonomous driving dataset with fine-tuned YOLOX detector, hyperparameter optimization, and comprehensive evaluation.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
@@ -8,94 +8,126 @@
 
 ---
 
-## 🎯 **What This Project Does**
+## 🎯 **Project Overview**
 
-This is a **complete multi-object tracking (MOT) evaluation framework** designed to:
+Complete **multi-object tracking (MOT) research framework** with:
 
-1. **Compare State-of-the-Art Trackers**:
-   - **TrackSSM**: State Space Model-based tracker with Mamba architecture
-   - **BotSort**: Motion + appearance-based tracker with camera motion compensation
+1. **State-of-the-Art Trackers**:
+   - **TrackSSM**: Mamba SSM-based motion predictor (replaces Kalman Filter)
+   - **BotSort**: Motion + ReID tracker with camera motion compensation
 
-2. **Flexible Detection Modes**:
-   - **GT Oracle**: Uses ground truth detections for upper-bound performance analysis
-   - **YOLOX Detector**: Real-world COCO-pretrained detector for practical scenarios
+2. **Fine-Tuned Detection**:
+   - **YOLOX-L** fine-tuned on NuScenes (30 epochs, 7 classes)
+   - Training loss: 10.70 → 4.55 (-37.4% reduction)
+   - Stable training with warmup + no-augmentation phases
 
-3. **Comprehensive Evaluation**:
-   - HOTA, CLEAR (MOTA, MOTP, IDSW), Identity (IDF1) metrics
-   - Per-class evaluation for multi-class datasets
-   - Automatic metric computation with TrackEval integration
+3. **Hyperparameter Optimization**:
+   - Parallel grid search (4 workers)
+   - Real-time best config tracking
+   - 320 configurations explored (conf_thresh, match_thresh, track_thresh, nms_thresh)
 
-4. **Production-Ready Pipeline**:
-   - Single command for tracking + evaluation
-   - Dual output formats (MOT standard + multi-class)
-   - Video export with bounding box visualization
-   - Experiment tracking with full config logging
+4. **Comprehensive Evaluation**:
+   - HOTA, MOTA, IDF1, IDSW metrics
+   - Per-class and aggregate analysis
+   - Automated evaluation pipeline
 
 ---
 
-## 📊 **Key Results**
+## 📊 **Latest Results**
 
-**TrackSSM on NuScenes validation set (GT detector, 150 scenes)**:
-- HOTA: 57.26% | MOTA: 59.74% | IDF1: 59.20% | IDSW: 2
+**TrackSSM + YOLOX Fine-tuned (Epoch 30)**:
+- **MOTA**: 36.02% | **IDF1**: 51.49% | **HOTA**: 52.78%
+- **IDSW**: 3042 | **Recall**: 54.42% | **Precision**: 85.08%
+- 151 validation scenes, 7 classes
 
-**System supports**:
-- 150 NuScenes validation scenes
-- 7 object classes (pedestrian, car, truck, bus, motorcycle, bicycle, trailer)
-- 12 FPS video export
-- Batch processing of all scenes
+**YOLOX-L Detector Performance**:
+- Fine-tuned on NuScenes for 30 epochs
+- Best checkpoint: Epoch 25 (loss 4.52)
+- Stable convergence (CV=0.6% in no-aug phase)
 
 ---
 
 ## 🚀 **Quick Start**
 
-### Installation
+### Run Tracking with Fine-Tuned Detector
 
 ```bash
-git clone https://github.com/Andream1912/BotSort-vs-TrackSSM-on-Nuscenes.git
-cd BotSort-vs-TrackSSM-on-Nuscenes
+# TrackSSM with YOLOX fine-tuned detector
+python track.py \
+    --tracker trackssm \
+    --detector-weights yolox_finetuning/yolox_l_nuscenes_stable/epoch_30.pth \
+    --conf-thresh 0.3 \
+    --match-thresh 0.85 \
+    --output results/my_experiment \
+    --gt-data data/nuscenes_mot_front/val
 
-# Create environment
-conda create -n mot python=3.10
-conda activate mot
-pip install -r requirements.txt
+# Evaluate results
+python scripts/evaluation/evaluate_motmetrics.py \
+    --pred-folder results/my_experiment/data \
+    --output results/my_experiment/metrics.json
 ```
 
-### Run Tracking + Evaluation
+### Run Parallel Grid Search
 
 ```bash
-# TrackSSM with GT detector on all scenes
-python track.py \
-    --tracker trackssm \
-    --use-gt-det \
-    --data data/nuscenes_mot_front/val \
-    --output results/trackssm_oracle \
-    --evaluate
+# Start 4 parallel workers for hyperparameter optimization
+./scripts/grid_search/start_grid_search.sh 30 4
 
-# With video export on specific scenes
-python track.py \
-    --tracker trackssm \
-    --use-gt-det \
-    --data data/nuscenes_mot_front/val \
-    --output results/demo \
-    --scenes scene-0003_CAM_FRONT,scene-0012_CAM_FRONT \
-    --save-videos \
-    --evaluate
-```
+# Monitor progress in real-time
+./scripts/grid_search/monitor_grid_search.sh
 
-**Output**:
-```
-results/trackssm_oracle/
-├── metrics_summary.json    # ⭐ Main metrics file
-├── experiment_config.json  # Full experiment log
-├── data/                   # MOT format results
-├── with_classes/           # Multi-class results
-└── videos/                 # Visualization (if --save-videos)
+# View best configuration anytime
+cat results/GRID_SEARCH_PARALLEL/best_config.json | python -m json.tool
 ```
 
 ---
 
 ## 🏗️ **Project Structure**
 
+```
+tesi_project_amarino/
+├── track.py                    # Main tracking script
+├── README.md                   # This file
+├── requirements.txt            # Python dependencies
+│
+├── scripts/                    # Organized scripts
+│   ├── testing/               # Test scripts for different configs
+│   ├── evaluation/            # Evaluation and analysis tools
+│   ├── grid_search/           # Parallel hyperparameter search
+│   ├── training/              # TrackSSM training scripts
+│   └── plotting/              # Visualization scripts
+│
+├── docs/                       # Documentation
+│   └── TRACKSSM_HISTORY_MANAGEMENT.md
+│
+├── logs_archive/               # Historical logs
+│
+├── yolox_finetuning/          # Detector fine-tuning
+│   ├── training_stable.log    # Training log
+│   ├── training_curve.png     # Training visualization
+│   └── yolox_l_nuscenes_stable/
+│       ├── epoch_1.pth        # Checkpoints
+│       ├── epoch_10.pth
+│       ├── epoch_25.pth       # Best loss (4.52)
+│       └── epoch_30.pth       # Most refined
+│
+├── src/                        # Source code
+│   ├── trackers/              # Tracker implementations
+│   ├── detectors/             # Detector wrappers
+│   └── utils/                 # Utilities
+│
+├── weights/                    # Model weights
+│   ├── detectors/             # YOLOX pre-trained
+│   ├── trackssm/              # TrackSSM checkpoints
+│   └── reid/                  # ReID models
+│
+├── data/                       # Datasets
+│   └── nuscenes_mot_front/    # NuScenes MOT format
+│
+└── results/                    # Experiment outputs
+    ├── TRACKSSM_STABLE_EPOCH30/
+    ├── GRID_SEARCH_PARALLEL/
+    └── ...
 ```
 tesi_project_amarino/
 ├── track.py                # Main tracking script

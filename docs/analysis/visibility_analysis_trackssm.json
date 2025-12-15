@@ -1,0 +1,45 @@
+{
+  "gt_stats": {
+    "total_annotations": 34365,
+    "visibility_distribution": {
+      "1": {
+        "count": 34365,
+        "percentage": 100.0
+      },
+      "2": {
+        "count": 0,
+        "percentage": 0.0
+      },
+      "3": {
+        "count": 0,
+        "percentage": 0.0
+      },
+      "4": {
+        "count": 0,
+        "percentage": 0.0
+      }
+    },
+    "bbox_area_stats": {
+      "1": {
+        "mean": 195083.97823407824,
+        "median": 9643.794899999999,
+        "std": 459152.1367891737,
+        "min": 3.0452,
+        "max": 1437501.0,
+        "percentile_25": 3081.4083,
+        "percentile_75": 45367.3653
+      }
+    }
+  },
+  "detector_comparison": {
+    "num_frames": 777,
+    "avg_pred_per_frame": 3.5456885456885456,
+    "avg_gt_per_frame": 5.583011583011583,
+    "avg_diff": -2.0373230373230373,
+    "median_diff": -2.0,
+    "std_diff": 2.375853875338218,
+    "frames_with_more_preds": 38,
+    "frames_with_more_gt": 569,
+    "frames_equal": 170
+  }
+}

@@ -9,6 +9,12 @@ Usage:
 
 import os
 import sys
+
+# Set Triton environment variables for performance (before any imports)
+os.environ['TRITON_CACHE_DIR'] = os.path.expanduser('~/.triton/cache')
+os.environ['TRITON_INTERPRET'] = '1'  # Use interpreter - avoid slow JIT autotuning
+os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
+
 import argparse
 import cv2
 import torch
@@ -49,17 +55,17 @@ def parse_args():
     parser.add_argument('--detector-weights', type=str,
                        default='yolox_finetuning/yolox_l_nuscenes_clean_v2/epoch_10.pth',
                        help='Path to YOLOX weights (default: NuScenes fine-tuned)')
-    parser.add_argument('--conf-thresh', type=float, default=0.3,
-                       help='Detection confidence threshold (optimal: 0.3)')
-    parser.add_argument('--nms-thresh', type=float, default=0.65,
-                       help='NMS threshold')
+    parser.add_argument('--conf-thresh', type=float, default=0.5,
+                       help='Detection confidence threshold (optimal: 0.5 from grid search exp_0262)')
+    parser.add_argument('--nms-thresh', type=float, default=0.6,
+                       help='NMS threshold (optimal: 0.6 from grid search exp_0262)')
     
     # Tracker config (optimal values from grid search Dec 2024: match=0.85, age=30, track=0.6, conf=0.3)
     # TrackSSM + fine-tuned detector achieves IDSW=2646, MOTA=33.85% (beats BotSort IDSW=2754 by -3.9%)
     parser.add_argument('--track-thresh', type=float, default=0.6,
                        help='Track confidence threshold (optimal: 0.6)')
-    parser.add_argument('--match-thresh', type=float, default=0.85,
-                       help='Matching IoU threshold (optimal: 0.85, KEY parameter!)')
+    parser.add_argument('--match-thresh', type=float, default=0.8,
+                       help='Matching IoU threshold (optimal: 0.8 from grid search exp_0262)')
     parser.add_argument('--max-age', type=int, default=30,
                        help='Maximum frames to keep lost track (default: 30, optimal from grid search)')
     parser.add_argument('--min-hits', type=int, default=1,
@@ -169,8 +175,16 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
         else:
             detections = detector.detect(img)
         
+        # Filter invalid bboxes (width or height too small for ReID)
+        # ReID requires minimum bbox size for cv2.resize (at least 5x5 pixels)
+        valid_detections = []
+        for det in detections:
+            x, y, w, h = det['bbox']
+            if w >= 5 and h >= 5:  # Min size for ReID processing
+                valid_detections.append(det)
+        
         # Update tracker
-        tracks = tracker.update(detections, frame=img)
+        tracks = tracker.update(valid_detections, frame=img)
         
         # Draw tracks on frame if saving video
         if video_writer is not None:
@@ -423,14 +437,12 @@ def main():
         print()
         
         try:
-            # Use evaluate.py with TrackEval for complete metrics
+            # Use evaluate_motmetrics.py for complete metrics
             import subprocess
             eval_cmd = [
-                sys.executable, 'evaluate.py',
-                '--gt-folder', gt_path,
-                '--results-folder', os.path.join(args.output, 'data'),
-                '--output-file', metrics_file,
-                '--seqmap-file', temp_seqmap
+                sys.executable, 'scripts/evaluation/evaluate_motmetrics.py',
+                '--pred-folder', os.path.join(args.output, 'data'),
+                '--output', metrics_file
             ]
             
             print(f"Running: {' '.join(eval_cmd)}")

@@ -1,0 +1,26 @@
+{
+  "total_frames": 1949,
+  "total_gt": 11522,
+  "total_pred": 6868,
+  "matched": 7245,
+  "unmatched_gt": 4277,
+  "unmatched_pred": 727,
+  "unmatched_gt_by_size": {
+    "tiny": 585,
+    "small": 1732,
+    "medium": 735,
+    "large": 1225
+  },
+  "unmatched_pred_by_size": {
+    "tiny": 10,
+    "small": 282,
+    "medium": 231,
+    "large": 204
+  },
+  "analysis": {
+    "gt_far_ratio": 0.5417348608837971,
+    "pred_far_ratio": 0.4016506189821183,
+    "gt_near_ratio": 0.2864157119476268,
+    "pred_near_ratio": 0.28060522696011003
+  }
+}

@@ -49,6 +49,7 @@ class Exp(MyExp):
         self.weight_decay = 5e-4
         
         # Eval
+        self.eval_interval = 1  # Run validation every epoch
         self.test_conf = 0.01
         self.nmsthre = 0.65
         

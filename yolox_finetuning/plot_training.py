@@ -8,7 +8,7 @@ import numpy as np
 from pathlib import Path
 
 # Parse log file
-log_file = Path(__file__).parent / "training_clean_v2.log"
+log_file = Path(__file__).parent / "training_smooth.log"
 print(f"Parsing log: {log_file}")
 
 # Store metrics per epoch
@@ -20,16 +20,16 @@ cls_losses = []
 learning_rates = []
 
 # Regex pattern for loss lines
-pattern = r'iter (\d+)/2667 - loss: total: ([\d.]+), iou: ([\d.]+), l1: ([\d.]+), conf: ([\d.]+), cls: ([\d.]+), lr: ([\d.]+)'
+pattern = r'iter (\d+)/666 - loss: total: ([\d.]+), iou: ([\d.]+), l1: ([\d.]+), conf: ([\d.]+), cls: ([\d.]+), lr: ([\d.]+)'
 
 current_epoch = 0
-iter_per_epoch = 2667
+iter_per_epoch = 666
 
 with open(log_file, 'r') as f:
     for line in f:
         # Track epoch changes
-        if "Epoch " in line and "/10" in line:
-            match = re.search(r'Epoch (\d+)/10', line)
+        if "Epoch " in line and "/30" in line:
+            match = re.search(r'Epoch (\d+)/30', line)
             if match:
                 current_epoch = int(match.group(1))
         
@@ -57,7 +57,7 @@ print(f"Parsed {len(epochs)} data points across {current_epoch} epochs")
 
 # Create figure with subplots
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-fig.suptitle('YOLOX Fine-Tuning on NuScenes - Training 2 (LR 0.001)', 
+fig.suptitle('YOLOX Fine-Tuning on NuScenes - Smooth Training (Batch 32, 30 Epochs)', 
              fontsize=16, fontweight='bold')
 
 # Plot 1: Total Loss
@@ -67,7 +67,7 @@ ax1.set_xlabel('Epoch', fontsize=12)
 ax1.set_ylabel('Total Loss', fontsize=12)
 ax1.set_title('Total Loss', fontsize=13, fontweight='bold')
 ax1.grid(True, alpha=0.3)
-ax1.set_xlim(1, 10)
+ax1.set_xlim(1, 30)
 
 # Add text annotation for loss reduction
 initial_loss = np.mean(total_losses[:10])
@@ -83,7 +83,7 @@ ax2.set_xlabel('Epoch', fontsize=12)
 ax2.set_ylabel('IoU Loss', fontsize=12)
 ax2.set_title('IoU Loss (Localization)', fontsize=13, fontweight='bold')
 ax2.grid(True, alpha=0.3)
-ax2.set_xlim(1, 10)
+ax2.set_xlim(1, 30)
 
 # Plot 3: Confidence Loss
 ax3 = axes[1, 0]
@@ -92,7 +92,7 @@ ax3.set_xlabel('Epoch', fontsize=12)
 ax3.set_ylabel('Confidence Loss', fontsize=12)
 ax3.set_title('Confidence Loss (Objectness)', fontsize=13, fontweight='bold')
 ax3.grid(True, alpha=0.3)
-ax3.set_xlim(1, 10)
+ax3.set_xlim(1, 30)
 
 # Plot 4: Classification Loss
 ax4 = axes[1, 1]
@@ -101,7 +101,7 @@ ax4.set_xlabel('Epoch', fontsize=12)
 ax4.set_ylabel('Classification Loss', fontsize=12)
 ax4.set_title('Classification Loss (7 Classes)', fontsize=13, fontweight='bold')
 ax4.grid(True, alpha=0.3)
-ax4.set_xlim(1, 10)
+ax4.set_xlim(1, 30)
 
 # Add text annotation for class loss reduction
 initial_cls = np.mean(cls_losses[:10])
@@ -127,11 +127,11 @@ ax.plot(epochs, cls_losses, linewidth=2, label='Classification Loss', color='#C7
 
 ax.set_xlabel('Epoch', fontsize=13, fontweight='bold')
 ax.set_ylabel('Loss', fontsize=13, fontweight='bold')
-ax.set_title('YOLOX Fine-Tuning - All Losses (Training 2, LR 0.001)', 
+ax.set_title('YOLOX Fine-Tuning - All Losses (Smooth Training, Batch 32)', 
              fontsize=15, fontweight='bold')
 ax.legend(fontsize=11, loc='upper right')
 ax.grid(True, alpha=0.3)
-ax.set_xlim(1, 10)
+ax.set_xlim(1, 30)
 
 # Add configuration info
 config_text = (
@@ -162,7 +162,7 @@ print(f"Total Loss:   {initial_loss:.2f} → {final_loss:.2f} ({((initial_loss-f
 print(f"IoU Loss:     {np.mean(iou_losses[:10]):.2f} → {np.mean(iou_losses[-10:]):.2f}")
 print(f"Conf Loss:    {np.mean(conf_losses[:10]):.2f} → {np.mean(conf_losses[-10:]):.2f}")
 print(f"Class Loss:   {initial_cls:.2f} → {final_cls:.2f} ({((initial_cls-final_cls)/initial_cls*100):.1f}% reduction)")
-print(f"Final LR:     {learning_rates[-1]:.6f}")
+# print(f"Final LR:     {learning_rates[-1]:.2f}")
 print("="*50)
 
 plt.show()
