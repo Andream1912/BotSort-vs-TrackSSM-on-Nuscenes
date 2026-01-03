@@ -43,6 +43,7 @@ data/nuscenes_test_interpolation/
 data/nuscenes_tracks/
 data/nuscenes_yolo_7classes/
 data/nuscenes_yolox_detector/
+data/nuscenes_yolox_6cams/
 data/*.pkl
 data/*.json
 

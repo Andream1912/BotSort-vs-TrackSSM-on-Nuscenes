@@ -316,7 +316,91 @@ class Trainer:
 
         return model
 
+
+    def compute_validation_loss(self):
+        """Compute validation loss on the validation dataset.
+
+        Note: YOLOX's standard eval loader uses ValTransform which returns dummy
+        targets (zeros). That's correct for mAP computation (COCOEvaluator uses
+        annotations internally), but wrong for computing detection losses.
+        """
+        if self.use_model_ema:
+            evalmodel = self.ema_model.ema
+        else:
+            evalmodel = self.model
+            if is_parallel(evalmodel):
+                evalmodel = evalmodel.module
+
+        # Build a validation dataloader that returns REAL GT targets.
+        from yolox.data import COCODataset, TrainTransform
+
+        val_dataset = COCODataset(
+            data_dir=self.exp.data_dir,
+            json_file=self.exp.val_ann,
+            name="val2017",
+            img_size=self.exp.test_size,
+            preproc=TrainTransform(max_labels=50, flip_prob=0.0, hsv_prob=0.0),
+        )
+        val_sampler = (
+            torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False)
+            if self.is_distributed
+            else torch.utils.data.SequentialSampler(val_dataset)
+        )
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=(
+                getattr(self.exp, "eval_batch_size", None)
+                if getattr(self.exp, "eval_batch_size", None) is not None
+                else self.args.batch_size
+            ),
+            sampler=val_sampler,
+            num_workers=getattr(self.exp, "data_num_workers", 0),
+            pin_memory=True,
+        )
+
+        # YOLOX returns losses only when model.training=True; however, we should
+        # avoid updating BatchNorm running stats during validation.
+        evalmodel.train()
+
+        def _set_bn_eval(m):
+            if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+                m.eval()
+
+        evalmodel.apply(_set_bn_eval)
+        
+        total_loss = 0.0
+        num_batches = 0
+        
+        logger.info("Computing validation loss...")
+        
+        with torch.no_grad():
+            for batch_idx, (imgs, targets, _, _) in enumerate(val_loader):
+                imgs = imgs.to(self.device)
+                targets = targets.to(self.device)
+
+                imgs, targets = self.exp.preprocess(imgs, targets, self.exp.test_size)
+                
+                # Forward pass
+                outputs = evalmodel(imgs, targets=targets)
+                loss = outputs["total_loss"]
+                
+                total_loss += loss.item()
+                num_batches += 1
+                
+                # Log progress every 100 batches
+                if (batch_idx + 1) % 100 == 0:
+                    logger.info(f"Validation: [{batch_idx + 1}/{len(val_loader)}] batches processed")
+        
+        avg_val_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        
+        logger.info(f"Validation Loss: {avg_val_loss:.4f}")
+        
+        return avg_val_loss
+
     def evaluate_and_save_model(self):
+        # Compute validation loss first
+        val_loss = self.compute_validation_loss()
+        
         if self.use_model_ema:
             evalmodel = self.ema_model.ema
         else:
@@ -336,16 +420,19 @@ class Trainer:
             if self.args.logger == "tensorboard":
                 self.tblogger.add_scalar("val/COCOAP50", ap50, self.epoch + 1)
                 self.tblogger.add_scalar("val/COCOAP50_95", ap50_95, self.epoch + 1)
+                self.tblogger.add_scalar("val/loss", val_loss, self.epoch + 1)  # Add validation loss
             if self.args.logger == "wandb":
                 self.wandb_logger.log_metrics(
                     {
                         "val/COCOAP50": ap50,
                         "val/COCOAP50_95": ap50_95,
+                        "val/loss": val_loss,  # Add validation loss
                         "train/epoch": self.epoch + 1,
                     }
                 )
                 self.wandb_logger.log_images(predictions)
             logger.info("\n" + summary)
+            logger.info(f"Validation Loss: {val_loss:.4f}")
         synchronize()
 
         self.save_ckpt("last_epoch", update_best_ckpt, ap=ap50_95)
