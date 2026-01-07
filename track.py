@@ -53,23 +53,22 @@ def parse_args():
     parser.add_argument('--use-gt-det', action='store_true',
                        help='Use ground truth detections instead of YOLOX (oracle mode)')
     parser.add_argument('--detector-weights', type=str,
-                       default='yolox_finetuning/yolox_l_nuscenes_clean_v2/epoch_10.pth',
-                       help='Path to YOLOX weights (default: NuScenes fine-tuned)')
-    parser.add_argument('--conf-thresh', type=float, default=0.5,
-                       help='Detection confidence threshold (optimal: 0.5 from grid search exp_0262)')
-    parser.add_argument('--nms-thresh', type=float, default=0.6,
-                       help='NMS threshold (optimal: 0.6 from grid search exp_0262)')
+                       default='weights/detectors/yolox_x.pth',
+                       help='Path to YOLOX weights (default: YOLOX-X COCO weights)')
+    parser.add_argument('--conf-thresh', type=float, default=0.1,
+                       help='Detection confidence threshold (default: 0.1)')
+    parser.add_argument('--nms-thresh', type=float, default=0.65,
+                       help='NMS threshold (default: 0.65)')
     
-    # Tracker config (optimal values from grid search Dec 2024: match=0.85, age=30, track=0.6, conf=0.3)
-    # TrackSSM + fine-tuned detector achieves IDSW=2646, MOTA=33.85% (beats BotSort IDSW=2754 by -3.9%)
+    # Tracker config
     parser.add_argument('--track-thresh', type=float, default=0.6,
-                       help='Track confidence threshold (optimal: 0.6)')
+                       help='Track confidence threshold (default: 0.6)')
     parser.add_argument('--match-thresh', type=float, default=0.8,
-                       help='Matching IoU threshold (optimal: 0.8 from grid search exp_0262)')
+                       help='Matching IoU threshold (default: 0.8)')
     parser.add_argument('--max-age', type=int, default=30,
-                       help='Maximum frames to keep lost track (default: 30, optimal from grid search)')
-    parser.add_argument('--min-hits', type=int, default=1,
-                       help='Minimum hits before track is activated (default: 1, optimal from grid search)')
+                       help='Maximum frames to keep lost track (default: 30)')
+    parser.add_argument('--min-hits', type=int, default=3,
+                       help='Minimum hits before track is activated (default: 3)')
     parser.add_argument('--trackssm-checkpoint', type=str,
                        default='weights/trackssm/phase2/phase2_full_best.pth',
                        help='TrackSSM checkpoint path (default: Phase2 NuScenes fine-tuned)')
@@ -259,13 +258,33 @@ def main():
         detector = GTDetector(data_root=args.data)
     else:
         print(f"\n[1/3] Initializing YOLOX detector...")
+
+        # Default setup policy:
+        # - COCO pretrained weights (e.g., yolox_x.pth / yolox_l.pth): 80 classes + COCO->nuScenes mapping
+        # - nuScenes fine-tuned weights (7 classes): native nuScenes class IDs
+        weights_lower = args.detector_weights.lower()
+        is_coco_pretrained = (
+            "weights/detectors" in weights_lower
+            or weights_lower.endswith("yolox_x.pth")
+            or weights_lower.endswith("yolox_l.pth")
+            or weights_lower.endswith("yolox_m.pth")
+            or weights_lower.endswith("yolox_s.pth")
+        )
+
+        if is_coco_pretrained:
+            detector_test_size = (1280, 1280)  # YOLOX default
+            detector_num_classes = None         # auto-detect (expected: 80)
+        else:
+            detector_test_size = (800, 1440)    # nuScenes fine-tuning resolution used in this project
+            detector_num_classes = 7
+
         detector = YOLOXDetector(
             model_path=args.detector_weights,
             conf_thresh=args.conf_thresh,
             nms_thresh=args.nms_thresh,
             device=args.device,
-            test_size=(800, 1440),  # NuScenes fine-tuned resolution
-            num_classes=7  # NuScenes 7 classes (vs COCO 80)
+            test_size=detector_test_size,
+            num_classes=detector_num_classes,
         )
     
     # Initialize tracker
@@ -411,11 +430,23 @@ def main():
         
         # Add detector config
         if not args.use_gt_det:
+            detector_model = "YOLOX"
+            if "yolox_x" in args.detector_weights.lower():
+                detector_model = "YOLOX-X"
+            elif "yolox_l" in args.detector_weights.lower():
+                detector_model = "YOLOX-L"
+            elif "yolox_m" in args.detector_weights.lower():
+                detector_model = "YOLOX-M"
+            elif "yolox_s" in args.detector_weights.lower():
+                detector_model = "YOLOX-S"
+
             config_data['detector_config'] = {
-                'model': 'YOLOX-X',
+                'model': detector_model,
                 'weights': args.detector_weights,
                 'conf_thresh': args.conf_thresh,
-                'nms_thresh': args.nms_thresh
+                'nms_thresh': args.nms_thresh,
+                'test_size': list(detector_test_size),
+                'num_classes': detector_num_classes,
             }
         
         # Save experiment config

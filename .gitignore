@@ -35,8 +35,9 @@ logs/
 *.out
 nohup.out
 
-# Data directories (too large, user must prepare locally)
-data/nuscenes_mot_front/
+# Data directories
+# NOTE: For plug&play we track the main experiment dataset: data/nuscenes_mot_front/
+# Keep the heavier training datasets ignored.
 data/nuscenes_mot_front_7classes/
 data/nuscenes_mot_6cams_interpolated/
 data/nuscenes_test_interpolation/
@@ -51,24 +52,46 @@ data/*.json
 !data/.gitkeep
 !data/README.md
 
+# Track the main experiment dataset (NuScenes MOT Front)
+!data/nuscenes_mot_front/
+!data/nuscenes_mot_front/**
+
 # Results and experiments (generated during runtime)
 results/
 !results/.gitkeep
 !results/README.md
 
+# Keep the best grid-search configuration (small, useful for reproduction)
+!results/GRID_SEARCH/
+!results/GRID_SEARCH/best_config.json
+
 # Failed experiments and analysis artifacts
 results/TRYING_TO_REDUCE_IDSW/
 results/IDSW_ANALYSIS/
 
-# Model weights (too large, provide download instructions)
-weights/**/*.pth
-weights/**/*.pt
-weights/**/*.onnx
-weights/detectors/
-weights/reid/
-weights/trackssm/
+# Model weights
+# Default: ignore all (large). For plug&play we explicitly track the main checkpoints.
+weights/**
 !weights/.gitkeep
 !weights/README.md
+
+# Allow specific detectors
+!weights/detectors/
+!weights/detectors/yolox_x.pth
+!weights/detectors/yolox_l.pth
+
+# Allow specific TrackSSM checkpoints
+!weights/trackssm/
+!weights/trackssm/phase1/
+!weights/trackssm/phase1/phase1_decoder_best.pth
+!weights/trackssm/phase2/
+!weights/trackssm/phase2/phase2_full_best.pth
+!weights/trackssm/pretrained/
+!weights/trackssm/pretrained/MOT17_epoch160.pt
+
+# Allow ReID weights used by BoT-SORT
+!weights/reid/
+!weights/reid/mot17_sbs_S50.pth
 
 # Training experiments
 experiments/
@@ -84,6 +107,10 @@ yolox_finetuning/*.log
 !yolox_finetuning/training_clean_v2.log
 yolox_finetuning/.nfs*
 yolox_finetuning/launcher.log
+
+# Track the single fine-tuned checkpoint used in experiments
+!yolox_finetuning/yolox_l_nuscenes_stable/
+!yolox_finetuning/yolox_l_nuscenes_stable/epoch_30.pth
 
 # IDE and editors
 .vscode/
@@ -111,6 +138,10 @@ Thumbs.db
 # Documentation artifacts
 EVALUATION_COMPLETE.md
 NEXT_STEPS_7CLASSES.md
+
+# Local thesis / run artifacts (keep out of git)
+scripts/thesis_runs/
+thesis_outputs_detector_30/
 
 # External dependencies (should be installed separately)
 external/YOLOX/
