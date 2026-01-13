@@ -9,6 +9,15 @@ import numpy as np
 import torch
 from collections import deque
 
+import os
+
+def _debug_enabled() -> bool:
+    return os.environ.get('TRACKSSM_DEBUG', '0') == '1'
+
+
+def _dprint(msg: str):
+    if _debug_enabled():
+        print(msg)
 
 class TrackSSMMotion:
     """
@@ -74,9 +83,9 @@ class TrackSSMMotion:
         
         # DEBUG: First initiate
         if not hasattr(self, '_debug_initiate_logged'):
-            print(f"      🎬 initiate() called: measurement={measurement}")
-            print(f"         cx={cx:.1f}, cy={cy:.1f}, param3={param3:.3f}, h={h:.1f}")
-            print(f"         computed w={w:.1f}, aspect={aspect_ratio:.3f}")
+            _dprint(f"      🎬 initiate() called: measurement={measurement}")
+            _dprint(f"         cx={cx:.1f}, cy={cy:.1f}, param3={param3:.3f}, h={h:.1f}")
+            _dprint(f"         computed w={w:.1f}, aspect={aspect_ratio:.3f}")
             self._debug_initiate_logged = True
         
         # Initialize history with current measurement
@@ -144,7 +153,7 @@ class TrackSSMMotion:
         if not hasattr(self, '_metadata_logged'):
             self._metadata_logged = 0
         if self._metadata_logged < 5:
-            print(f"🔍 TrackSSM.predict() track_id={track_id}, class_id={track_class}, conf={track_conf:.3f}")
+            _dprint(f"🔍 TrackSSM.predict() track_id={track_id}, class_id={track_class}, conf={track_conf:.3f}")
             self._metadata_logged += 1
         
         # Prepare TrackSSM input: (history_len, 8)
@@ -156,8 +165,8 @@ class TrackSSMMotion:
             
             # DEBUG: First prediction RAW values
             if not hasattr(self, '_debug_raw_logged') and i == len(history) - 1:
-                print(f"      📊 RAW bbox: cx={cx_h:.1f}, cy={cy_h:.1f}, w={w_h:.1f}, h={h_h:.1f}")
-                print(f"      📐 img_size: {self.img_width}x{self.img_height}")
+                _dprint(f"      📊 RAW bbox: cx={cx_h:.1f}, cy={cy_h:.1f}, w={w_h:.1f}, h={h_h:.1f}")
+                _dprint(f"      📐 img_size: {self.img_width}x{self.img_height}")
                 self._debug_raw_logged = True
             
             # Normalize current bbox
@@ -240,6 +249,136 @@ class TrackSSMMotion:
             vx, vy, vw, vh = mean[4:8]
             pred_mean = np.array([cx + vx, cy + vy, w + vw, h + vh, vx, vy, vw, vh])
             return pred_mean, covariance
+
+    def batch_predict(self, multi_mean, multi_covariance, track_ids=None):
+        """Batched version of predict() for multiple tracks.
+
+        This is a performance optimization: BoT-SORT calls multi_predict() every frame.
+        Running TrackSSM one track at a time causes significant per-call overhead.
+        Here we batch all tracks with available history into a single encoder+decoder forward.
+
+        Args:
+            multi_mean: array-like of shape (N, 8)
+            multi_covariance: array-like of shape (N, 8, 8)
+            track_ids: list of length N
+
+        Returns:
+            (pred_means, pred_covs) as numpy arrays.
+        """
+        if track_ids is None:
+            track_ids = [None] * len(multi_mean)
+
+        n = len(multi_mean)
+        out_means = [None] * n
+        out_covs = [None] * n
+
+        valid_indices = []
+        conditions = []
+        base_states = []  # (cx, cy, w, h)
+
+        # First pass: build batch for tracks with history; fill constant-velocity for others.
+        for i in range(n):
+            mean = np.asarray(multi_mean[i])
+            cov = np.asarray(multi_covariance[i])
+            tid = track_ids[i]
+
+            cx, cy, w, h = mean[:4]
+
+            if tid is None or tid not in self.track_histories or len(self.track_histories[tid]) == 0:
+                vx, vy, vw, vh = mean[4:8]
+                out_means[i] = np.array([cx + vx, cy + vy, w + vw, h + vh, vx, vy, vw, vh])
+                out_covs[i] = cov
+                continue
+
+            history = list(self.track_histories[tid])
+            if len(history) < self.history_len:
+                history = [history[0]] * (self.history_len - len(history)) + history
+            else:
+                history = history[-self.history_len:]
+
+            condition = []
+            for j, bbox in enumerate(history):
+                cx_h, cy_h, w_h, h_h = bbox
+
+                cx_norm = cx_h / self.img_width
+                cy_norm = cy_h / self.img_height
+                w_norm = w_h / self.img_width
+                h_norm = h_h / self.img_height
+
+                if j > 0:
+                    prev_cx, prev_cy, prev_w, prev_h = history[j - 1]
+                    delta_cx = (cx_h - prev_cx) / self.img_width
+                    delta_cy = (cy_h - prev_cy) / self.img_height
+                    delta_w = (w_h - prev_w) / self.img_width
+                    delta_h = (h_h - prev_h) / self.img_height
+                else:
+                    delta_cx = delta_cy = delta_w = delta_h = 0.0
+
+                condition.append([cx_norm, cy_norm, w_norm, h_norm, delta_cx, delta_cy, delta_w, delta_h])
+
+            valid_indices.append(i)
+            conditions.append(np.asarray(condition, dtype=np.float32))
+            base_states.append((cx, cy, w, h))
+
+        # If nothing to batch, return what we have.
+        if not valid_indices:
+            return np.asarray(out_means), np.asarray(out_covs)
+
+        # Batched TrackSSM forward.
+        try:
+            condition_batch = np.stack(conditions, axis=0)  # (V, L, 8)
+            with torch.no_grad():
+                condition_tensor = torch.from_numpy(condition_batch).to(self.device)
+
+                cond_encoded = self.model.encoder(condition_tensor)
+                last_bbox_norm = condition_tensor[:, -1, :4]
+                pred_bbox_norm = self.model.ssm_decoder(last_bbox_norm, cond_encoded, h=None)
+                pred_bbox_norm = pred_bbox_norm.float().detach().cpu().numpy()  # (V, 4)
+
+            for batch_j, i in enumerate(valid_indices):
+                mean = np.asarray(multi_mean[i])
+                cov = np.asarray(multi_covariance[i])
+
+                cx, cy, w, h = base_states[batch_j]
+                vx0, vy0, vw0, vh0 = mean[4:8]
+
+                row = pred_bbox_norm[batch_j]
+
+                # Sanity checks (same as predict())
+                if (
+                    np.any(np.isnan(row))
+                    or np.any(np.isinf(row))
+                    or row[2] <= 0
+                    or row[3] <= 0
+                    or row[2] > 2.0
+                    or row[3] > 2.0
+                ):
+                    out_means[i] = np.array([cx + vx0, cy + vy0, w + vw0, h + vh0, vx0, vy0, vw0, vh0])
+                    out_covs[i] = cov
+                    continue
+
+                cx_pred = row[0] * self.img_width
+                cy_pred = row[1] * self.img_height
+                w_pred = row[2] * self.img_width
+                h_pred = row[3] * self.img_height
+
+                vx = cx_pred - cx
+                vy = cy_pred - cy
+                vw = w_pred - w
+                vh = h_pred - h
+
+                out_means[i] = np.array([cx_pred, cy_pred, w_pred, h_pred, vx, vy, vw, vh])
+                out_covs[i] = cov
+
+        except Exception:
+            # Conservative fallback: per-track predict()
+            for i in valid_indices:
+                mean = np.asarray(multi_mean[i])
+                cov = np.asarray(multi_covariance[i])
+                tid = track_ids[i]
+                out_means[i], out_covs[i] = self.predict(mean, cov, track_id=tid)
+
+        return np.asarray(out_means), np.asarray(out_covs)
     
     def update(self, mean, covariance, measurement, track_id=None, class_id=None, confidence=None):
         """

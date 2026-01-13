@@ -20,8 +20,19 @@ import cv2
 import torch
 import numpy as np
 import json
+import time
 from pathlib import Path
 from tqdm import tqdm
+
+# Performance knobs (safe defaults for modern NVIDIA GPUs)
+try:
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    if hasattr(torch, 'set_float32_matmul_precision'):
+        torch.set_float32_matmul_precision('high')
+except Exception:
+    pass
 
 # Add project paths
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -59,6 +70,11 @@ def parse_args():
                        help='Detection confidence threshold (default: 0.1)')
     parser.add_argument('--nms-thresh', type=float, default=0.65,
                        help='NMS threshold (default: 0.65)')
+    parser.add_argument('--detector-test-size', type=int, nargs=2, default=None,
+                       metavar=('H', 'W'),
+                       help='Override YOLOX test size as two ints: H W (e.g., 640 1152). If not set, uses the default policy based on checkpoint type.')
+    parser.add_argument('--detector-fp16', action='store_true',
+                       help='Enable FP16 autocast for YOLOX inference on CUDA (faster, may slightly change outputs)')
     
     # Tracker config
     parser.add_argument('--track-thresh', type=float, default=0.6,
@@ -69,11 +85,30 @@ def parse_args():
                        help='Maximum frames to keep lost track (default: 30)')
     parser.add_argument('--min-hits', type=int, default=3,
                        help='Minimum hits before track is activated (default: 3)')
+    parser.add_argument('--cmc-method', type=str, default='sparseOptFlow',
+                       choices=['sparseOptFlow', 'orb', 'sift', 'ecc', 'file', 'files', 'none'],
+                       help='Camera motion compensation method for BoT-SORT (default: sparseOptFlow). Use none for faster runtime.')
     parser.add_argument('--trackssm-checkpoint', type=str,
                        default='weights/trackssm/phase2/phase2_full_best.pth',
                        help='TrackSSM checkpoint path (default: Phase2 NuScenes fine-tuned)')
     parser.add_argument('--use-mot17-checkpoint', action='store_true',
                        help='Use MOT17 pretrained checkpoint (Phase1) instead of NuScenes fine-tuned (Phase2)')
+
+    # TrackSSM performance options
+    batch_group = parser.add_mutually_exclusive_group()
+    batch_group.add_argument('--trackssm-batch', dest='trackssm_batch', action='store_true',
+                             help='Enable batched TrackSSM motion prediction (faster; default)')
+    batch_group.add_argument('--trackssm-no-batch', dest='trackssm_batch', action='store_false',
+                             help='Disable batched TrackSSM prediction (slow; for ablation/comparison)')
+    parser.set_defaults(trackssm_batch=True)
+
+    # BoT-SORT internals
+    reid_group = parser.add_mutually_exclusive_group()
+    reid_group.add_argument('--with-reid', dest='with_reid', action='store_true',
+                           help='Enable ReID inside BoT-SORT (default)')
+    reid_group.add_argument('--no-reid', dest='with_reid', action='store_false',
+                           help='Disable ReID inside BoT-SORT (useful for fast benchmarking)')
+    parser.set_defaults(with_reid=True)
     
     # Device
     parser.add_argument('--device', type=str, default='cuda',
@@ -96,6 +131,22 @@ def parse_args():
                        help='IoU threshold for evaluation matching (default: 0.5)')
     parser.add_argument('--metrics-output', type=str, default=None,
                        help='Output file for metrics JSON (default: {output}/metrics.json)')
+
+    # Benchmarking (Jetson / deployment-like testing)
+    parser.add_argument('--benchmark', action='store_true',
+                       help='Measure inference timing (FPS/latency) and write a benchmark.json report')
+    parser.add_argument('--benchmark-warmup', type=int, default=5,
+                       help='Warmup frames per scene excluded from stats (default: 5)')
+    parser.add_argument('--benchmark-max-frames', type=int, default=0,
+                       help='Max frames per scene for benchmarking (0 = all frames)')
+    parser.add_argument('--benchmark-sync-cuda', action='store_true',
+                       help='Synchronize CUDA when measuring timings (recommended for accurate GPU timings)')
+    parser.add_argument('--benchmark-include-io', action='store_true',
+                       help='Include image read/decode time in totals (default: off; totals will exclude IO)')
+    parser.add_argument('--benchmark-output', type=str, default=None,
+                       help='Benchmark JSON output file (default: {output}/benchmark.json)')
+    parser.add_argument('--no-save-results', action='store_true',
+                       help='Do not write MOT output files (useful for pure inference benchmarking)')
     
     return parser.parse_args()
 
@@ -108,12 +159,39 @@ def get_scenes(data_root, scene_list=None):
         scenes = [s.strip() for s in scene_list.split(',')]
     else:
         # Get all scenes
-        scenes = sorted([d.name for d in data_path.iterdir() if d.is_dir()])
+        # NuScenes scenes in this project follow: scene-XXXX(_CAM_FRONT)
+        # Filter out helper folders like "seqmaps" to avoid warnings and bogus eval entries.
+        scenes = sorted([d.name for d in data_path.iterdir() if d.is_dir() and d.name.startswith('scene-')])
     
     return scenes
 
 
-def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_det=False, save_video=False, video_fps=12):
+def _maybe_sync_cuda(enabled: bool, device: str):
+    if not enabled:
+        return
+    if device is None:
+        return
+    if str(device).startswith('cuda') and torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
+def _ms(dt_seconds: float) -> float:
+    return float(dt_seconds * 1000.0)
+
+
+def process_scene(
+    scene_name,
+    data_root,
+    detector,
+    tracker,
+    output_dir,
+    use_gt_det=False,
+    save_video=False,
+    video_fps=12,
+    benchmark_cfg=None,
+    no_save_results=False,
+    device='cuda'
+):
     """Process a single scene"""
     scene_path = Path(data_root) / scene_name
     img_dir = scene_path / 'img1'
@@ -127,14 +205,14 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
     
     if not img_dir.exists():
         print(f"⚠️  Image directory not found: {img_dir}")
-        return
+        return {'processed': False, 'timing_rows': None}
     
     # Get all images
     images = sorted(list(img_dir.glob('*.jpg')) + list(img_dir.glob('*.png')))
     
     if len(images) == 0:
         print(f"⚠️  No images found in {img_dir}")
-        return
+        return {'processed': False, 'timing_rows': None}
     
     # Reset tracker for new scene
     tracker.reset()
@@ -158,21 +236,42 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
             print(f"  Saving video to: {video_path}")
     
     results = []
+    timing_rows = []
     
     # Process each frame (no per-frame progress bar for cleaner output)
+    max_frames = 0
+    warmup = 0
+    sync_cuda = False
+    include_io = False
+    if benchmark_cfg:
+        max_frames = int(benchmark_cfg.get('max_frames', 0) or 0)
+        warmup = int(benchmark_cfg.get('warmup', 0) or 0)
+        sync_cuda = bool(benchmark_cfg.get('sync_cuda', False))
+        include_io = bool(benchmark_cfg.get('include_io', False))
+
     for frame_id, img_path in enumerate(images, start=1):
+        if max_frames > 0 and frame_id > max_frames:
+            break
+
+        t_frame_start = time.perf_counter()
+
         # Load image
+        t0 = time.perf_counter()
         img = cv2.imread(str(img_path))
+        t_read = time.perf_counter() - t0
         
         if img is None:
             print(f"⚠️  Failed to load image: {img_path}")
             continue
         
         # Detect objects
+        t0 = time.perf_counter()
         if use_gt_det:
             detections = detector.detect(scene_name, frame_id)
         else:
             detections = detector.detect(img)
+        _maybe_sync_cuda(sync_cuda, device)
+        t_det = time.perf_counter() - t0
         
         # Filter invalid bboxes (width or height too small for ReID)
         # ReID requires minimum bbox size for cv2.resize (at least 5x5 pixels)
@@ -183,7 +282,10 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
                 valid_detections.append(det)
         
         # Update tracker
+        t0 = time.perf_counter()
         tracks = tracker.update(valid_detections, frame=img)
+        _maybe_sync_cuda(sync_cuda, device)
+        t_track = time.perf_counter() - t0
         
         # Draw tracks on frame if saving video
         if video_writer is not None:
@@ -205,6 +307,25 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
             
             video_writer.write(vis_img)
         
+        # Benchmark row (exclude warmup frames from summary later)
+        if benchmark_cfg is not None:
+            t_total = time.perf_counter() - t_frame_start
+            timing_rows.append({
+                'scene': scene_name,
+                'frame': int(frame_id),
+                'read_ms': _ms(t_read),
+                'detect_ms': _ms(t_det),
+                'track_ms': _ms(t_track),
+                # total_ms is either full end-to-end (incl IO) or compute-only
+                'total_ms': _ms(t_total if include_io else (t_det + t_track)),
+                'n_dets': int(len(detections) if detections is not None else 0),
+                'n_tracks': int(len(tracks) if tracks is not None else 0),
+                'is_warmup': bool(frame_id <= warmup),
+            })
+
+        if no_save_results:
+            continue
+
         # Save results in MOT format
         # Format: frame, track_id, x, y, w, h, conf, class_id, visibility
         for track in tracks:
@@ -218,16 +339,18 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
                 'class_id': track['class_id']
             })
     
-    # Write results in MOT format with 7-class NuScenes IDs
-    # Save in data/ subdirectory for evaluation
-    output_file = Path(output_dir) / 'data' / f"{scene_name}.txt"
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, 'w') as f:
-        for r in results:
-            # MOT format: frame,id,x,y,w,h,conf,class,visibility,unused (10 columns)
-            # class_id is native NuScenes (1=car, 2=truck, 3=bus, 4=trailer, 5=pedestrian, 6=motorcycle, 7=bicycle)
-            f.write(f"{r['frame']},{r['track_id']},{r['bbox'][0]:.2f},{r['bbox'][1]:.2f},"
-                   f"{r['bbox'][2]:.2f},{r['bbox'][3]:.2f},{r['confidence']:.4f},{r['class_id']},1,-1\n")
+    output_file = None
+    if not no_save_results:
+        # Write results in MOT format with 7-class NuScenes IDs
+        # Save in data/ subdirectory for evaluation
+        output_file = Path(output_dir) / 'data' / f"{scene_name}.txt"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, 'w') as f:
+            for r in results:
+                # MOT format: frame,id,x,y,w,h,conf,class,visibility,unused (10 columns)
+                # class_id is native NuScenes (1=car, 2=truck, 3=bus, 4=trailer, 5=pedestrian, 6=motorcycle, 7=bicycle)
+                f.write(f"{r['frame']},{r['track_id']},{r['bbox'][0]:.2f},{r['bbox'][1]:.2f},"
+                       f"{r['bbox'][2]:.2f},{r['bbox'][3]:.2f},{r['confidence']:.4f},{r['class_id']},1,-1\n")
     
     # Release video writer if used
     if video_writer is not None:
@@ -235,8 +358,14 @@ def process_scene(scene_name, data_root, detector, tracker, output_dir, use_gt_d
         print(f"  ✓ Video saved: {len(images)} frames")
     
     num_unique_tracks = len(set(r['track_id'] for r in results))
-    print(f"  ✓ Saved {num_unique_tracks} unique tracks ({len(results)} total detections)")
-    print(f"  ✓ Results: {output_file}")
+    if not no_save_results and output_file is not None:
+        print(f"  ✓ Saved {num_unique_tracks} unique tracks ({len(results)} total detections)")
+        print(f"  ✓ Results: {output_file}")
+
+    return {
+        'processed': True,
+        'timing_rows': timing_rows if benchmark_cfg is not None else None,
+    }
 
 
 
@@ -278,6 +407,9 @@ def main():
             detector_test_size = (800, 1440)    # nuScenes fine-tuning resolution used in this project
             detector_num_classes = 7
 
+        if args.detector_test_size is not None:
+            detector_test_size = (int(args.detector_test_size[0]), int(args.detector_test_size[1]))
+
         detector = YOLOXDetector(
             model_path=args.detector_weights,
             conf_thresh=args.conf_thresh,
@@ -285,6 +417,7 @@ def main():
             device=args.device,
             test_size=detector_test_size,
             num_classes=detector_num_classes,
+            fp16=bool(args.detector_fp16),
         )
     
     # Initialize tracker
@@ -297,7 +430,9 @@ def main():
         'img_width': 1600,
         'img_height': 900,
         'max_age': args.max_age,
-        'min_hits': args.min_hits
+        'min_hits': args.min_hits,
+        'with_reid': args.with_reid,
+        'cmc_method': args.cmc_method,
     }
     
     # Add TrackSSM-specific config
@@ -316,6 +451,7 @@ def main():
         tracker_config['checkpoint_type'] = checkpoint_type
         tracker_config['history_len'] = 5
         tracker_config['oracle_mode'] = args.use_gt_det  # Use GT track IDs in oracle mode
+        tracker_config['trackssm_batch'] = bool(args.trackssm_batch)
     
     tracker = TrackerFactory.create(args.tracker, tracker_config)
     
@@ -326,9 +462,10 @@ def main():
     
     # Process each scene with overall progress bar
     processed_scenes = []
+    benchmark_all = []
     for idx, scene_name in enumerate(tqdm(scenes, desc="Overall Progress", unit="scene")):
         print(f"\n[Scene {idx+1}/{len(scenes)}] Processing {scene_name}...")
-        process_scene(
+        scene_out = process_scene(
             scene_name=scene_name,
             data_root=args.data,
             detector=detector,
@@ -336,26 +473,124 @@ def main():
             output_dir=args.output,
             use_gt_det=args.use_gt_det,
             save_video=args.save_videos,
-            video_fps=args.video_fps
+            video_fps=args.video_fps,
+            benchmark_cfg=(
+                {
+                    'warmup': args.benchmark_warmup,
+                    'max_frames': args.benchmark_max_frames,
+                    'sync_cuda': args.benchmark_sync_cuda,
+                    'include_io': args.benchmark_include_io,
+                } if args.benchmark else None
+            ),
+            no_save_results=args.no_save_results,
+            device=args.device
         )
-        processed_scenes.append(scene_name)
+
+        # Only count scenes that were actually processed (prevents seqmaps/empty dirs from polluting eval).
+        if isinstance(scene_out, dict):
+            if not scene_out.get('processed', False):
+                continue
+            processed_scenes.append(scene_name)
+            timing_rows = scene_out.get('timing_rows')
+        else:
+            # Backwards-compatible fallback (older return type)
+            processed_scenes.append(scene_name)
+            timing_rows = scene_out
+
+        if args.benchmark and timing_rows:
+            benchmark_all.extend(timing_rows)
     
     # Move results to data/ subfolder for TrackEval compatibility
-    data_dir = os.path.join(args.output, 'data')
-    os.makedirs(data_dir, exist_ok=True)
-    for scene_name in processed_scenes:
-        result_file = os.path.join(args.output, f'{scene_name}.txt')
-        if os.path.exists(result_file):
-            os.rename(result_file, os.path.join(data_dir, f'{scene_name}.txt'))
+    # (kept for backwards compatibility; in this project we already write into {output}/data/)
+    if not args.no_save_results:
+        data_dir = os.path.join(args.output, 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        for scene_name in processed_scenes:
+            result_file = os.path.join(args.output, f'{scene_name}.txt')
+            if os.path.exists(result_file):
+                os.rename(result_file, os.path.join(data_dir, f'{scene_name}.txt'))
     
     print("\n" + "="*80)
     print(f"✓ Tracking complete! Results saved to: {args.output}")
     print("="*80)
+
+    # Benchmark report
+    if args.benchmark and benchmark_all:
+        bench_df = __import__('pandas').DataFrame(benchmark_all)
+
+        # exclude warmup frames
+        bench_df_eval = bench_df[~bench_df['is_warmup']].copy()
+
+        def _summ_series(s):
+            if s is None:
+                return None
+            s = s.dropna().astype(float)
+            if s.empty:
+                return None
+            return {
+                'mean_ms': float(s.mean()),
+                'median_ms': float(s.median()),
+                'p95_ms': float(s.quantile(0.95)),
+            }
+
+        total_ms = bench_df_eval['total_ms'].astype(float) if not bench_df_eval.empty else None
+        fps = float(1000.0 / total_ms.mean()) if (total_ms is not None and total_ms.mean() > 0) else 0.0
+
+        per_scene = []
+        for scene, g in bench_df_eval.groupby('scene'):
+            tms = g['total_ms'].astype(float)
+            per_scene.append({
+                'scene': scene,
+                'frames': int(len(g)),
+                'fps': float(1000.0 / tms.mean()) if tms.mean() > 0 else 0.0,
+                'total_ms': {
+                    'mean_ms': float(tms.mean()),
+                    'median_ms': float(tms.median()),
+                    'p95_ms': float(tms.quantile(0.95)),
+                },
+                'detect_ms': _summ_series(g.get('detect_ms')),
+                'track_ms': _summ_series(g.get('track_ms')),
+                'read_ms': _summ_series(g.get('read_ms')) if args.benchmark_include_io else None,
+            })
+
+        bench_out = args.benchmark_output or os.path.join(args.output, 'benchmark.json')
+        bench_payload = {
+            'tracker': args.tracker,
+            'device': args.device,
+            'include_io': bool(args.benchmark_include_io),
+            'sync_cuda': bool(args.benchmark_sync_cuda),
+            'warmup_frames_per_scene': int(args.benchmark_warmup),
+            'max_frames_per_scene': int(args.benchmark_max_frames),
+            'n_rows': int(len(bench_df)),
+            'n_rows_eval': int(len(bench_df_eval)),
+            'fps_overall': fps,
+            'total_ms': _summ_series(bench_df_eval.get('total_ms')),
+            'detect_ms': _summ_series(bench_df_eval.get('detect_ms')),
+            'track_ms': _summ_series(bench_df_eval.get('track_ms')),
+            'read_ms': _summ_series(bench_df_eval.get('read_ms')) if args.benchmark_include_io else None,
+            'per_scene': sorted(per_scene, key=lambda x: x['fps']),
+        }
+
+        with open(bench_out, 'w') as f:
+            json.dump(bench_payload, f, indent=2)
+        print(f"\n⏱️  Benchmark saved: {bench_out}")
+        print(f"⏱️  FPS overall: {fps:.2f}")
     
-    # Print TrackSSM diagnostics if using trackssm tracker
+    # Print TrackSSM diagnostics (only if counters are available)
     if args.tracker == 'trackssm':
-        try:
-            motion = tracker.trackssm_motion
+        motion = getattr(tracker, 'trackssm_motion', None)
+        has_counters = motion is not None and all(
+            hasattr(motion, name)
+            for name in (
+                'n_predict_calls',
+                'n_model_calls',
+                'n_successful_predictions',
+                'n_fallback_no_history',
+                'n_fallback_sanity',
+                'n_exceptions',
+            )
+        )
+        if has_counters:
             print("\n" + "="*80)
             print("🔍 TRACKSSM DIAGNOSTICS")
             print("="*80)
@@ -372,8 +607,6 @@ def main():
                 print(f"Success rate:  {success_rate:.1f}% ({motion.n_successful_predictions}/{motion.n_predict_calls})")
                 print(f"Model usage:   {model_call_rate:.1f}% ({motion.n_model_calls}/{motion.n_predict_calls})")
             print("="*80)
-        except Exception as e:
-            print(f"\n⚠️  Could not print TrackSSM diagnostics: {e}")
     
     # Automatic evaluation if requested
     if args.evaluate:
@@ -427,6 +660,7 @@ def main():
                 config_data['tracker_config']['checkpoint_type'] = 'NuScenes fine-tuned (Phase2)'
                 config_data['tracker_config']['training_note'] = 'Fine-tuned on NuScenes after Phase1'
             config_data['tracker_config']['history_len'] = 5
+            config_data['tracker_config']['cmc_method'] = args.cmc_method
         
         # Add detector config
         if not args.use_gt_det:
@@ -447,6 +681,7 @@ def main():
                 'nms_thresh': args.nms_thresh,
                 'test_size': list(detector_test_size),
                 'num_classes': detector_num_classes,
+                'fp16': bool(args.detector_fp16),
             }
         
         # Save experiment config
@@ -475,6 +710,10 @@ def main():
                 '--pred-folder', os.path.join(args.output, 'data'),
                 '--output', metrics_file
             ]
+
+            # Evaluate only the scenes we actually processed (faster + no missing-pred warnings)
+            if processed_scenes:
+                eval_cmd += ['--scenes', ','.join(processed_scenes)]
             
             print(f"Running: {' '.join(eval_cmd)}")
             result = subprocess.run(eval_cmd, capture_output=False, text=True)

@@ -26,7 +26,7 @@ class YOLOXDetector:
     
     def __init__(self, model_path: str, conf_thresh: float = 0.1, 
                  nms_thresh: float = 0.65, device: str = 'cuda', test_size: tuple = (1280, 1280),
-                 model_name: str = None, num_classes: int = None):
+                 model_name: str = None, num_classes: int = None, fp16: bool = False):
         """
         Initialize YOLOX detector.
         
@@ -49,6 +49,7 @@ class YOLOXDetector:
         self.conf_thresh = conf_thresh
         self.nms_thresh = nms_thresh
         self.test_size = test_size
+        self.fp16 = bool(fp16)
         
         # Auto-detect model variant from path
         if model_name is None:
@@ -129,7 +130,13 @@ class YOLOXDetector:
         
         # Inference
         with torch.no_grad():
-            outputs = self.model(img_tensor)
+            use_fp16 = self.fp16 and str(self.device).startswith('cuda')
+            if use_fp16:
+                with torch.cuda.amp.autocast(enabled=True):
+                    outputs = self.model(img_tensor)
+                outputs = outputs.float()
+            else:
+                outputs = self.model(img_tensor)
             outputs = postprocess(
                 outputs, 
                 num_classes=self.num_classes,  # Use actual model classes

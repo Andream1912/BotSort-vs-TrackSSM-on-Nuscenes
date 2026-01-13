@@ -16,6 +16,17 @@ if botsort_path not in sys.path:
     sys.path.insert(0, botsort_path)
 
 from src.trackers.base_tracker import BaseTracker
+
+
+def _debug_enabled() -> bool:
+    return os.environ.get('TRACKSSM_DEBUG', '0') == '1'
+
+
+def _dprint(msg: str):
+    if _debug_enabled():
+        print(msg)
+
+
 from src.trackers.trackssm_motion import TrackSSMMotion
 
 # Import BoT-SORT
@@ -27,20 +38,21 @@ class TrackSSMWrapper:
     Wrapper for TrackSSMMotion that handles optional track_id parameter.
     BoT-SORT's KalmanFilter interface doesn't include track_id, so we wrap it.
     """
-    def __init__(self, trackssm_motion):
+    def __init__(self, trackssm_motion, use_batch: bool = True):
         self.motion = trackssm_motion
+        self.use_batch = bool(use_batch)
     
     def initiate(self, measurement, track_id=None, class_id=1, confidence=1.0):
         return self.motion.initiate(measurement, track_id=track_id, class_id=class_id, confidence=confidence)
     
     def predict(self, mean, covariance, track_id=None):
         pred_mean, pred_cov = self.motion.predict(mean, covariance, track_id=track_id)
-        
+
         # DEBUG: Log what we return to BoT-SORT
         if not hasattr(self, '_debug_predict_return'):
             self._debug_predict_return = 0
-        if self._debug_predict_return < 3:
-            print(f"      🔙 predict() returns: mean[:4]={pred_mean[:4]}")
+        if _debug_enabled() and self._debug_predict_return < 3:
+            _dprint(f"predict() returns: mean[:4]={pred_mean[:4]}")
             self._debug_predict_return += 1
         
         return pred_mean, pred_cov
@@ -56,18 +68,22 @@ class TrackSSMWrapper:
             self._multi_predict_count += 1
             
             if self._multi_predict_count <= 3:
-                print(f"🔥 TrackSSMWrapper.multi_predict() #{self._multi_predict_count} | {len(multi_mean)} tracks | track_ids: {track_ids[:5]}")
+                _dprint(f"🔥 TrackSSMWrapper.multi_predict() #{self._multi_predict_count} | {len(multi_mean)} tracks | track_ids: {track_ids[:5]}")
             
+            # Fast path: run TrackSSM in a single batched forward (keeps same logic, less overhead)
+            if self.use_batch and hasattr(self.motion, 'batch_predict'):
+                return self.motion.batch_predict(multi_mean, multi_covariance, track_ids)
+
             results_mean = []
             results_cov = []
             for mean, cov, track_id in zip(multi_mean, multi_covariance, track_ids):
                 pred_mean, pred_cov = self.motion.predict(mean, cov, track_id=track_id)
                 results_mean.append(pred_mean)
                 results_cov.append(pred_cov)
-            
+
             return np.array(results_mean), np.array(results_cov)
         except Exception as e:
-            print(f"❌ TrackSSMWrapper.multi_predict() FAILED: {e}")
+            _dprint(f"❌ TrackSSMWrapper.multi_predict() FAILED: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -80,7 +96,7 @@ class TrackSSMWrapper:
             self._debug_update_count = 0
         self._debug_update_count += 1
         if self._debug_update_count <= 5:
-            print(f"      ✅ update() called #{self._debug_update_count} track_id={track_id} - MATCH FOUND!")
+            _dprint(f"      ✅ update() called #{self._debug_update_count} track_id={track_id} - MATCH FOUND!")
         
         return updated_mean, updated_cov
 
@@ -109,7 +125,7 @@ class BoTSORTTrackSSM(BaseTracker):
         device = config.get('device', 'cuda')
         trackssm_weights = config.get('trackssm_weights', 'weights/trackssm/phase2/phase2_full_best.pth')
         
-        print(f"🔍 DEBUG: Loading TrackSSM from {trackssm_weights}...")
+        _dprint(f"Loading TrackSSM weights: {trackssm_weights}")
         self.trackssm_model = self._load_trackssm_model(trackssm_weights, device)
         print("✓ TrackSSM model loaded and ready")
         
@@ -160,14 +176,14 @@ class BoTSORTTrackSSM(BaseTracker):
         # BoT-SORT uses STrack.shared_kalman (static), not self.tracker.kalman_filter!
         from tracker.mc_bot_sort import STrack
         
-        trackssm_wrapper = TrackSSMWrapper(self.trackssm_motion)
+        trackssm_wrapper = TrackSSMWrapper(self.trackssm_motion, use_batch=bool(config.get('trackssm_batch', True)))
         self.tracker.kalman_filter = trackssm_wrapper
         STrack.shared_kalman = trackssm_wrapper  # THIS IS THE KEY FIX!
         
         print("✓ Replaced Kalman Filter with TrackSSM motion predictor (with track_id wrapper)")
-        print(f"🔍 DEBUG: BoT-SORT kalman_filter type: {type(self.tracker.kalman_filter)}")
-        print(f"🔍 DEBUG: STrack.shared_kalman type: {type(STrack.shared_kalman)}")
-        print(f"🔍 DEBUG: Is TrackSSMWrapper? {isinstance(self.tracker.kalman_filter, TrackSSMWrapper)}")
+        _dprint(f"BoT-SORT kalman_filter type: {type(self.tracker.kalman_filter)}")
+        _dprint(f"STrack.shared_kalman type: {type(STrack.shared_kalman)}")
+        _dprint(f"Is TrackSSMWrapper? {isinstance(self.tracker.kalman_filter, TrackSSMWrapper)}")
     
     def _patch_strack_methods(self):
         """
@@ -197,7 +213,7 @@ class BoTSORTTrackSSM(BaseTracker):
             # DEBUG: Log first call
             if not hasattr(STrack, '_predict_debug_logged'):
                 STrack._predict_debug_logged = True
-                print(f"🔍 DEBUG: patched_predict() called! track_id={self.track_id if hasattr(self, 'track_id') else 'N/A'}")
+                _dprint(f"patched_predict() first call; track_id={self.track_id if hasattr(self, 'track_id') else 'N/A'}")
             
             mean_state = self.mean.copy()
             if self.state != 1:  # TrackState.Tracked
@@ -319,7 +335,7 @@ class BoTSORTTrackSSM(BaseTracker):
         STrack.update = patched_update
         STrack.multi_predict = patched_multi_predict  # 🔥 CRITICAL FIX!
         
-        print("✓ Patched STrack methods to pass track_id to TrackSSM (including multi_predict)")
+        _dprint("✓ Patched STrack methods to pass track_id to TrackSSM (including multi_predict)")
     
     def update(self, detections: List[Dict], frame: Any = None) -> List[Dict]:
         """

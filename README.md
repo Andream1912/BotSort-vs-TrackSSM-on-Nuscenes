@@ -2,23 +2,16 @@
 
 Framework di tracking multi-oggetto per confrontare TrackSSM e BoT-SORT su NuScenes, con detector YOLOX e pipeline di evaluation.
 
-## Plug & Play (cosa è incluso)
+## Asset (dataset / weights)
 
-Questo repo è configurato per partire senza dover rigenerare asset.
+Per motivi di **licenza** e **dimensione**, il dataset nuScenes e diversi checkpoint non sono pensati per essere redistribuiti “embedded” nel repo pubblico.
 
-- Dataset esperimenti (front camera, formato MOT): `data/nuscenes_mot_front/`
-- Pesi principali (vedi sezione “Pesi”): `weights/` e `yolox_finetuning/yolox_l_nuscenes_stable/epoch_30.pth`
-- Preset di configurazione: `configs/experiment_presets.json`
-- Best config dalla grid search (per riproduzione): `results/GRID_SEARCH/best_config.json`
+- Dataset esperimenti (front camera, formato MOT): `data/nuscenes_mot_front/` (da generare o trasferire)
+- Pesi principali (da scaricare/trasferire):
+  - YOLOX fine-tuned: `yolox_finetuning/yolox_l_nuscenes_stable/epoch_30.pth`
+  - TrackSSM fine-tuned (Phase2): `weights/trackssm/phase2/phase2_full_best.pth`
 
-> Nota: i file grandi (pesi) sono gestiti con Git LFS su GitHub.
->
-> Se stai clonando e non vedi i `.pth/.pt`, installa LFS e riesegui il pull:
->
-> ```bash
-> git lfs install
-> git lfs pull
-> ```
+Per la riproduzione degli esperimenti già fissati: `results/GRID_SEARCH/best_config.json`.
 
 ## Installazione
 
@@ -27,6 +20,14 @@ pip install -r requirements.txt
 ```
 
 Dipendenze esterne (non vendorizzate): vedi `external/README.md`.
+
+### YOLOX (obbligatorio)
+
+Il progetto si aspetta YOLOX in `external/YOLOX`:
+
+```bash
+git clone https://github.com/Megvii-BaseDetection/YOLOX external/YOLOX
+```
 
 ## Quick start: tracking + valutazione
 
@@ -40,10 +41,12 @@ python track.py \
   --data data/nuscenes_mot_front/val \
   --gt-data data/nuscenes_mot_front/val \
   --detector-weights yolox_finetuning/yolox_l_nuscenes_stable/epoch_30.pth \
-  --conf-thresh 0.3 \
-  --nms-thresh 0.5 \
+  --conf-thresh 0.5 \
+  --nms-thresh 0.6 \
   --track-thresh 0.6 \
   --match-thresh 0.8 \
+  --cmc-method sparseOptFlow \
+  --trackssm-batch \
   --output results/run_trackssm 
 ```
 
@@ -84,6 +87,19 @@ Per TrackSSM:
 
 - Default (Phase2 NuScenes): `weights/trackssm/phase2/phase2_full_best.pth`
 - Baseline MOT17 (Phase1): `--use-mot17-checkpoint` (usa `weights/trackssm/pretrained/MOT17_epoch160.pt`)
+
+## Performance (tesi): cosa abbiamo ottimizzato
+
+- **Batched TrackSSM motion prediction** (default ON): evita una forward GPU per ogni track; usa un’unica forward batched per frame.
+  - Flag: `--trackssm-batch` / `--trackssm-no-batch`.
+- **Benchmark integrato** in `track.py`: `--benchmark` salva `benchmark.json` con breakdown (`detect_ms`, `track_ms`, `total_ms`) e FPS.
+- **CMC trade-off**:
+  - `--cmc-method none` massimizza FPS.
+  - `--cmc-method sparseOptFlow` migliora significativamente le metriche (HOTA/IDF1/MOTA) ma costa tempo nel tracker.
+
+## Jetson
+
+Istruzioni step-by-step per Jetson: vedi [README_JETSON.md](README_JETSON.md).
 
 ## Dataset: generazione (opzionale)
 

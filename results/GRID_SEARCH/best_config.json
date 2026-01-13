@@ -1,0 +1,40 @@
+{
+  "experiment_id": 5,
+  "config": {
+    "conf_thresh": 0.3,
+    "match_thresh": 0.8,
+    "track_thresh": 0.6,
+    "nms_thresh": 0.5
+  },
+  "metrics": {
+    "MOTA": 35.690382656772876,
+    "MOTP": 0.0,
+    "IDF1": 51.19974291223309,
+    "IDP": 66.24012565251536,
+    "IDR": 41.725592899752655,
+    "IDSW": 3246,
+    "num_switches": 3246,
+    "num_fragmentations": 493,
+    "TP": 15333,
+    "FP": 3068,
+    "FN": 15786,
+    "num_false_positives": 3068,
+    "num_misses": 15786,
+    "num_matches": 15333,
+    "mostly_tracked": 864,
+    "partially_tracked": 1371,
+    "mostly_lost": 1835,
+    "precision": 85.82713539982446,
+    "recall": 54.06372762985596,
+    "RECALL": 54.06372762985596,
+    "num_objects": 34365,
+    "num_predictions": 21647,
+    "num_unique_objects": 4070,
+    "num_frames": 5792,
+    "HOTA": 52.57288765709297,
+    "MT_ratio": 21.22850122850123,
+    "ML_ratio": 45.08599508599509,
+    "PT_ratio": 33.68550368550369
+  },
+  "score": 40.99477871781367
+}

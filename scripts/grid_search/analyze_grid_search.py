@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""
-Analyze and visualize grid search results
+"""Analyze and visualize grid search results.
+
+This project stores grid-search experiments under:
+
+- results/GRID_SEARCH/exp_0001/ (config.json + metrics.json)
+
+Older variants stored a consolidated JSON file. This script supports both.
 """
 
 import json
@@ -10,16 +15,69 @@ import seaborn as sns
 from pathlib import Path
 import sys
 
-def load_results(results_file='results/GRID_SEARCH_PARALLEL/all_results.json'):
-    """Load grid search results"""
-    if not Path(results_file).exists():
-        print(f"❌ Results file not found: {results_file}")
+
+WEIGHTS = {
+    'MOTA': 0.35,
+    'IDF1': 0.30,
+    'HOTA': 0.25,
+    'IDSW': -0.10,  # Negative because lower is better
+}
+
+
+def compute_score(metrics: dict) -> float:
+    mota = float(metrics.get('MOTA', 0) or 0)
+    idf1 = float(metrics.get('IDF1', 0) or 0)
+    hota = float(metrics.get('HOTA', 0) or 0)
+    idsw = float(metrics.get('IDSW', 10000) or 10000)
+    idsw_norm = max(0.0, 100.0 - (idsw / 30.0))
+    return (
+        WEIGHTS['MOTA'] * mota
+        + WEIGHTS['IDF1'] * idf1
+        + WEIGHTS['HOTA'] * hota
+        + WEIGHTS['IDSW'] * idsw_norm
+    )
+
+def load_results(results_path='results/GRID_SEARCH'):
+    """Load grid search results.
+
+    Supports:
+    - a directory containing exp_*/config.json + metrics.json (preferred)
+    - a consolidated JSON file with {'results': [...]} (legacy)
+    """
+    p = Path(results_path)
+    if not p.exists():
+        print(f"❌ Results path not found: {results_path}")
         return None
-    
-    with open(results_file, 'r') as f:
-        data = json.load(f)
-    
-    return data
+
+    if p.is_file():
+        with open(p, 'r') as f:
+            return json.load(f)
+
+    # Directory mode: scan exp_* folders
+    results = []
+    for exp_dir in sorted(p.glob('exp_*')):
+        cfg_path = exp_dir / 'config.json'
+        met_path = exp_dir / 'metrics.json'
+        if not cfg_path.exists() or not met_path.exists():
+            continue
+
+        try:
+            cfg = json.loads(cfg_path.read_text())
+            metrics = json.loads(met_path.read_text())
+            exp_id = int(cfg.get('experiment_id') or cfg.get('exp_id') or exp_dir.name.split('_')[-1])
+            config = cfg.get('config', {})
+            score = compute_score(metrics)
+
+            results.append({
+                'experiment_id': exp_id,
+                'config': config,
+                'metrics': metrics,
+                'score': score,
+            })
+        except Exception as e:
+            print(f"⚠️  Failed to load {exp_dir}: {e}")
+
+    return {'results': results, 'source': str(p)}
 
 def create_results_dataframe(data):
     """Convert results to pandas DataFrame"""
@@ -27,12 +85,12 @@ def create_results_dataframe(data):
     
     rows = []
     for r in results:
-        config = r['config']
-        metrics = r['metrics']
+        config = r.get('config', {})
+        metrics = r.get('metrics', {})
         
         row = {
             'exp_id': r['experiment_id'],
-            'score': r['score'],
+            'score': r.get('score', compute_score(metrics)),
             'conf_thresh': config['conf_thresh'],
             'match_thresh': config['match_thresh'],
             'track_thresh': config['track_thresh'],
@@ -60,8 +118,9 @@ def print_summary(df):
     print("-"*80)
     
     top10 = df.nlargest(10, 'score')
-    for idx, row in top10.iterrows():
-        print(f"\n#{idx+1} | Score: {row['score']:.2f} | Exp ID: {row['exp_id']:04d}")
+    for rank, (_, row) in enumerate(top10.iterrows(), start=1):
+        exp_id = int(row['exp_id']) if pd.notna(row.get('exp_id')) else -1
+        print(f"\n#{rank} | Score: {row['score']:.2f} | Exp ID: {exp_id:04d}")
         print(f"  Config: conf={row['conf_thresh']:.2f}, match={row['match_thresh']:.2f}, "
               f"track={row['track_thresh']:.2f}, nms={row['nms_thresh']:.2f}")
         print(f"  Metrics: MOTA={row['MOTA']:.1f}%, IDF1={row['IDF1']:.1f}%, "
@@ -87,6 +146,8 @@ def create_visualizations(df, output_dir='results/GRID_SEARCH_PARALLEL'):
     output_dir.mkdir(parents=True, exist_ok=True)
     
     sns.set_style("whitegrid")
+
+    best = df.nlargest(1, 'score').iloc[0] if len(df) else None
     
     # 1. Score distribution by parameter
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
@@ -108,6 +169,10 @@ def create_visualizations(df, output_dir='results/GRID_SEARCH_PARALLEL'):
         ax.set_ylabel('Average Score', fontsize=12)
         ax.set_title(f'Score vs {label}', fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3)
+
+        if best is not None and param in best:
+            ax.axvline(float(best[param]), color='red', linestyle='--', linewidth=2, alpha=0.8)
+            ax.text(float(best[param]), ax.get_ylim()[1], ' best', color='red', va='top')
     
     plt.tight_layout()
     plt.savefig(output_dir / 'parameter_impact.png', dpi=300, bbox_inches='tight')
@@ -156,7 +221,8 @@ def create_visualizations(df, output_dir='results/GRID_SEARCH_PARALLEL'):
     # Annotate best points
     best = df.nlargest(5, 'score')
     for _, row in best.iterrows():
-        plt.annotate(f"#{row['exp_id']:04d}", 
+        exp_id = int(row['exp_id']) if pd.notna(row.get('exp_id')) else -1
+        plt.annotate(f"#{exp_id:04d}", 
                     xy=(row['IDSW'], row['MOTA']),
                     xytext=(10, 10), textcoords='offset points',
                     bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.7),
@@ -205,7 +271,7 @@ def export_top_configs(df, output_file='results/GRID_SEARCH_PARALLEL/top10_confi
     print(f"\n✓ Saved top 10 configs to: {output_file}")
 
 if __name__ == '__main__':
-    results_file = sys.argv[1] if len(sys.argv) > 1 else 'results/GRID_SEARCH_PARALLEL/all_results.json'
+    results_file = sys.argv[1] if len(sys.argv) > 1 else 'results/GRID_SEARCH'
     
     print("Loading grid search results...")
     data = load_results(results_file)
@@ -218,8 +284,10 @@ if __name__ == '__main__':
     df = create_results_dataframe(data)
     
     print_summary(df)
-    create_visualizations(df)
-    export_top_configs(df)
+    # Save into results/GRID_SEARCH/analysis by default
+    out_dir = 'results/GRID_SEARCH/analysis'
+    create_visualizations(df, output_dir=out_dir)
+    export_top_configs(df, output_file=str(Path(out_dir) / 'top10_configs.json'))
     
     print("\n" + "="*80)
     print("ANALYSIS COMPLETE!")
