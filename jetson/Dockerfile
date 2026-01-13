@@ -23,9 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy project
 COPY tesi_project_amarino/ ./
 
-# Install Python deps (note: on Jetson, torch/torchvision are typically preinstalled in the base image)
+# Install Python deps (note: on Jetson, torch/torchvision/opencv are typically preinstalled in the base image)
 RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install --no-cache-dir -r requirements.txt || true
+  python3 -m pip install --no-cache-dir -r requirements_jetson.txt
 
 # Default entrypoint is an interactive shell; you will run benchmark commands manually.
 CMD ["bash"]
